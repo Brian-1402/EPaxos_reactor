@@ -1,0 +1,22 @@
+[[ops]]
+name = "reader"
+lib_name = "epaxos"
+
+[[ops]]
+name = "server"
+lib_name = "epaxos"
+
+[[nodes]]
+name = "node1"
+hostname = "127.0.0.1"
+port = 3000
+
+[placement]
+  [[placement.reader]]
+  nodename = "node1"
+  actor_name = "reader"
+  server = "epaxos1"
+  
+  [[placement.server]]
+  nodename = "node1"
+  actor_name = "epaxos1"

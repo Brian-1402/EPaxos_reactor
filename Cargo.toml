@@ -1,0 +1,20 @@
+[package]
+name = "epaxos"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"] 
+
+[features]
+# default = [ "verbose" ]
+verbose = [ ]
+
+[dependencies]
+bincode = "2.0.1"
+lazy_static = "1.5.0"
+reactor-actor = { git = "https://github.com/satyamjay-iitd/reactor/", branch = "master", package = "reactor-actor" }
+reactor-macros = { git = "https://github.com/satyamjay-iitd/reactor.git", branch = "master", package = "reactor-macros" }
+serde_json = "1.0.145"
+tokio = "1.48.0"
+tracing = "0.1.41"
