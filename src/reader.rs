@@ -12,13 +12,14 @@ use tracing::info;
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Generator
 // //////////////////////////////////////////////////////////////////////////////
-struct DelayedReadIterator {
+
+/// Iterator which yields read requests with a delay. Used by reactor-generator to create messages
+struct ReadReqGenerator {
     count: usize,
     addr: String,
 }
 
-// Generator which creates
-impl Iterator for DelayedReadIterator {
+impl Iterator for ReadReqGenerator {
     type Item = EMsg;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -39,6 +40,10 @@ impl Iterator for DelayedReadIterator {
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Processor
 // //////////////////////////////////////////////////////////////////////////////
+
+/// Processor struct for the Reader actor
+/// stores state in the struct fields
+/// process() method defines how to handle incoming messages, and return corresponding output messages
 struct Processor {
     #[cfg(feature = "verbose")]
     reader_client: String,
@@ -71,9 +76,9 @@ impl reactor_actor::ActorProcess for Processor {
                 vec![]
             }
 
-            // _ => {
-            //     panic!("Reader got an unexpected message")
-            // }
+            _ => {
+                panic!("Reader got an unexpected message")
+            }
         }
     }
 }
@@ -82,6 +87,9 @@ impl reactor_actor::ActorProcess for Processor {
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Sender
 // //////////////////////////////////////////////////////////////////////////////
+
+/// Sender struct for the Reader actor
+/// before_send() method defines how to route outgoing messages. Go to def of RouteTo for more details
 struct Sender {
     server: String,
 }
@@ -89,8 +97,8 @@ struct Sender {
 impl reactor_actor::ActorSend for Sender {
     type OMsg = EMsg;
 
-    async fn before_send<'a>(&'a mut self, _output: &Self::OMsg) -> RouteTo<'a> {
-        match &_output {
+    async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
+        match &output {
             EMsg::ReadRequest(_) => RouteTo::from(self.server.as_str()),
             _ => {
                 panic!("Reader tried to send non ReadRequest")
@@ -109,6 +117,14 @@ impl Sender {
 //                                  ACTORS
 // //////////////////////////////////////////////////////////////////////////////
 
+/// Reader actor
+/// - BehaviourBuilder takes input these actor components and builds the actor
+/// - uses `DelayedReadIterator` to generate read requests with a delay
+/// - uses `Processor` to process incoming messages
+/// - uses `Sender` to route outgoing messages
+/// - Only modify the method calls which take these earlier defined structs. Rest is default boilerplate
+/// - `on_send_failure` is to provide setting on what to do when sending fails, retry or drop. Go to `SendErrAction` for more details
+/// - Go to docs of `BehaviourBuilder` and `Behavior` struct for more details
 pub async fn reader(ctx: RuntimeCtx, server: String) {
     BehaviourBuilder::new(
         Processor {
@@ -118,7 +134,7 @@ pub async fn reader(ctx: RuntimeCtx, server: String) {
         BincodeCodec::default(),
     )
     .send(Sender::new(server))
-    .generator_if(true, || DelayedReadIterator {
+    .generator_if(true, || ReadReqGenerator {
         count: 0,
         addr: ctx.addr.to_string(),
     })

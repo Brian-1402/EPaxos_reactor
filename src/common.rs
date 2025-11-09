@@ -9,6 +9,13 @@ pub struct ReadRequest {
 }
 
 #[derive(Encode, Decode, Debug, Clone)]
+pub struct WriteRequest {
+    pub msg_id: String,
+    pub key: String,
+    pub val: String,
+}
+
+#[derive(Encode, Decode, Debug, Clone)]
 pub struct ReadResponse {
     pub msg_id: String,
     pub key: String,
@@ -18,5 +25,6 @@ pub struct ReadResponse {
 #[derive(Encode, Decode, Debug, Clone, DefaultPrio, DeriveMsg)]
 pub enum EMsg {
     ReadRequest(ReadRequest),
+    WriteRequest(WriteRequest),
     ReadResponse(ReadResponse),
 }
