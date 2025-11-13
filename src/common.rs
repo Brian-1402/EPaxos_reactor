@@ -22,9 +22,17 @@ pub struct ReadResponse {
     pub val: Option<String>,
 }
 
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct WriteResponse {
+    pub msg_id: String,
+    pub key: String,
+    pub success: bool,
+}
+
 #[derive(Encode, Decode, Debug, Clone, DefaultPrio, DeriveMsg)]
 pub enum EMsg {
     ReadRequest(ReadRequest),
     WriteRequest(WriteRequest),
     ReadResponse(ReadResponse),
+    WriteResponse(WriteResponse),
 }

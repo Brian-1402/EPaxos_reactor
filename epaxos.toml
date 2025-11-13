@@ -6,6 +6,10 @@ lib_name = "epaxos"
 name = "server"
 lib_name = "epaxos"
 
+[[ops]]
+name = "writer"
+lib_name = "epaxos"
+
 [[nodes]]
 name = "node1"
 hostname = "127.0.0.1"
@@ -20,3 +24,8 @@ port = 3000
   [[placement.server]]
   nodename = "node1"
   actor_name = "epaxos1"
+
+  [[placement.reader]]
+  nodename = "node1"
+  actor_name = "writer"
+  server = "epaxos1"

@@ -1,4 +1,4 @@
-use crate::common::{EMsg, ReadResponse};
+use crate::common::{EMsg, ReadResponse, WriteResponse};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
