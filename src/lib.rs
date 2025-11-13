@@ -1,9 +1,11 @@
 mod common;
 mod reader;
 mod server;
+mod writer;
 
 use crate::reader::reader as reader_behaviour;
 use crate::server::server as server_behaviour;
+use create::writer::writer as writer_behaviour;
 use reactor_actor::RuntimeCtx;
 use std::collections::HashMap;
 
@@ -28,4 +30,14 @@ fn reader(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
 #[actor]
 fn server(ctx: RuntimeCtx, _payload: HashMap<String, serde_json::Value>) {
     RUNTIME.spawn(server_behaviour(ctx));
+}
+
+#[actor]
+fn writer(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
+    let server = payload.remove("server")
+        .expect("server field missing")
+        .as_str()
+        .expect("server must be a string")
+        .to_string();
+    RUNTIME.spawn(writer_behaviour(ctx, server));
 }
