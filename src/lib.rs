@@ -5,7 +5,7 @@ mod writer;
 
 use crate::reader::reader as reader_behaviour;
 use crate::server::server as server_behaviour;
-use create::writer::writer as writer_behaviour;
+use crate::writer::writer as writer_behaviour;
 use reactor_actor::RuntimeCtx;
 use std::collections::HashMap;
 
