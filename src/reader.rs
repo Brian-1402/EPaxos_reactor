@@ -1,8 +1,7 @@
 use crate::SLEEP_MS;
 use crate::common::{EMsg, ReadRequest};
-use reactor_actor::{SendErrAction, BehaviourBuilder, RouteTo, RuntimeCtx};
 use reactor_actor::codec::BincodeCodec;
-
+use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
 use std::time::Duration;
 
@@ -28,7 +27,7 @@ impl Iterator for ReadReqGenerator {
             self.count += 1;
             Some(EMsg::ReadRequest(ReadRequest {
                 msg_id: format!("{}_r_{}", self.addr, self.count),
-                key: format!("key1"),
+                key: "key1".to_string(),
                 // key: format!("foo{}", self.count),
             }))
         } else {
@@ -83,7 +82,6 @@ impl reactor_actor::ActorProcess for Processor {
     }
 }
 
-
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Sender
 // //////////////////////////////////////////////////////////////////////////////
@@ -109,7 +107,7 @@ impl reactor_actor::ActorSend for Sender {
 
 impl Sender {
     fn new(server: String) -> Self {
-        Sender {server}
+        Sender { server }
     }
 }
 

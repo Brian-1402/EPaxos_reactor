@@ -36,7 +36,7 @@ impl Processor {
     fn new() -> Self {
         let mut map = HashMap::new();
         map.insert("key1".to_string(), "val1".to_string());
-        Processor{data: map}
+        Processor { data: map }
     }
 }
 
@@ -59,14 +59,11 @@ impl reactor_actor::ActorSend for Sender {
 // //////////////////////////////////////////////////////////////////////////////
 
 pub async fn server(ctx: RuntimeCtx) {
-    BehaviourBuilder::new(
-        Processor::new(),
-        BincodeCodec::default(),
-    )
-    .send(Sender {})
-    .on_send_failure(SendErrAction::Drop)
-    .build()
-    .run(ctx)
-    .await
-    .unwrap();
+    BehaviourBuilder::new(Processor::new(), BincodeCodec::default())
+        .send(Sender {})
+        .on_send_failure(SendErrAction::Drop)
+        .build()
+        .run(ctx)
+        .await
+        .unwrap();
 }

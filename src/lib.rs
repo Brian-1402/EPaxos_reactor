@@ -17,7 +17,8 @@ lazy_static::lazy_static! {
 
 #[actor]
 fn reader(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
-    let server = payload.remove("server")
+    let server = payload
+        .remove("server")
         .expect("server field missing")
         .as_str()
         .expect("server must be a string")
