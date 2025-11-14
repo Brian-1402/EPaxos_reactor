@@ -1,4 +1,4 @@
-use crate::common::{EMsg, ReadResponse};
+use crate::common::{EMsg, ReadResponse, WriteResponse};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -25,6 +25,15 @@ impl reactor_actor::ActorProcess for Processor {
                     val,
                 })]
             }
+
+            EMsg::WriteRequest(msg) => {
+                self.data.insert(msg.key.clone(), msg.val.clone());
+                vec![EMsg::WriteResponse(WriteResponse {
+                    msg_id: msg.msg_id.clone(),
+                    key: msg.key.clone(),
+                    success: true,
+                })]
+            }
             _ => {
                 panic!("Server got an unexpected message")
             }
@@ -46,7 +55,7 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, _output: &Self::OMsg) -> RouteTo<'a> {
         match &_output {
-            EMsg::ReadResponse(_) => RouteTo::Reply,
+            EMsg::ReadResponse(_) | EMsg::WriteResponse(_) => RouteTo::Reply,
             _ => {
                 panic!("Server tried to send non ReadResponse")
             }
