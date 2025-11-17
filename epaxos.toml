@@ -2,8 +2,12 @@
 name = "reader"
 lib_name = "epaxos"
 
+# [[ops]]
+# name = "ss"
+# lib_name = "epaxos"
+
 [[ops]]
-name = "server"
+name = "epaxos_server"
 lib_name = "epaxos"
 
 [[ops]]
@@ -21,9 +25,13 @@ port = 3000
   actor_name = "reader"
   server = "epaxos1"
   
-  [[placement.server]]
+  [[placement.epaxos_server]]
   nodename = "node1"
   actor_name = "epaxos1"
+
+  # [[placement.ss]]
+  # nodename = "node1"
+  # actor_name = "epaxos1"
 
   [[placement.writer]]
   nodename = "node1"

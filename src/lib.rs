@@ -1,10 +1,13 @@
 mod common;
 mod reader;
-mod server;
+// mod ss;
 mod writer;
 
+mod epaxos;
+
 use crate::reader::reader as reader_behaviour;
-use crate::server::server as server_behaviour;
+// use crate::ss::server as ss_behaviour;
+use crate::epaxos::server as epaxos_behaviour;
 use crate::writer::writer as writer_behaviour;
 use reactor_actor::RuntimeCtx;
 use std::collections::HashMap;
@@ -28,9 +31,14 @@ fn reader(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
     RUNTIME.spawn(reader_behaviour(ctx, server));
 }
 
+// #[actor]
+// fn ss(ctx: RuntimeCtx, _payload: HashMap<String, serde_json::Value>) {
+//     RUNTIME.spawn(ss_behaviour(ctx));
+// }
+
 #[actor]
-fn server(ctx: RuntimeCtx, _payload: HashMap<String, serde_json::Value>) {
-    RUNTIME.spawn(server_behaviour(ctx));
+fn epaxos_server(ctx: RuntimeCtx, _payload: HashMap<String, serde_json::Value>) {
+    RUNTIME.spawn(epaxos_behaviour(ctx));
 }
 
 #[actor]
