@@ -39,6 +39,14 @@ node: kill_node install_node build
 job: install_jobc
 	reactor_jctrl ./epaxos.toml
 
+clippy:
+	cargo clippy -- -D warnings
+
+fmt:
+	cargo fmt --all
+
+pre_commit: fmt clippy build
+
 clean:
 	cargo uninstall reactor_nctrl || true
 	cargo uninstall reactor_jctrl || true

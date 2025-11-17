@@ -4,6 +4,7 @@
 - `make build`: Builds the project
 - `make node`: Runs the node http server at port 3000. Builds the project as well
 - `make job`: (after make node) Runs job controller to load the epaxos library, connect to node and starts epaxos
+- `make pre_commit`: Runs all the CI/CD checks (formatting, linting, etc)
 
 ## CI/CD check commands
 ```bash

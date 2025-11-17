@@ -1,5 +1,5 @@
 use crate::SLEEP_MS;
-use crate::common::{EMsg, WriteRequest};
+use crate::common::{ClientRequest, Command, CommandResult, EMsg, Variable};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -25,10 +25,18 @@ impl Iterator for WriteReqGenerator {
         if self.count < 10 {
             std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
             self.count += 1;
-            Some(EMsg::WriteRequest(WriteRequest {
-                msg_id: format!("{}_w_{}", self.addr, self.count),
-                key: "key1".to_string(),
+
+            let cmd = Command::Set {
+                key: Variable {
+                    name: "key1".to_string(),
+                },
+                // key: Variable(format!("foo{}", self.count)),
                 val: format!("value{}", self.count),
+            };
+            Some(EMsg::ClientRequest(ClientRequest {
+                client_id: self.addr.clone(),
+                msg_id: format!("{}_r_{}", self.addr, self.count),
+                cmd,
             }))
         } else {
             None
@@ -51,27 +59,37 @@ impl reactor_actor::ActorProcess for Processor {
 
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
-            EMsg::WriteRequest(_msg) => {
+            // EMsg::WriteRequest(_msg) => {
+            //     #[cfg(feature = "verbose")]
+            //     {
+            //         info!(
+            //             "{} Writing: key={} val={}",
+            //             self.writer_client, _msg.key, _msg.val
+            //         );
+            //     }
+            //     vec![input]
+            // } // forward to server
+            EMsg::ClientRequest(_msg) => {
                 #[cfg(feature = "verbose")]
-                {
+                if let Command::Set { key, val } = &_msg.cmd {
                     info!(
                         "{} Writing: key={} val={}",
-                        self.writer_client, _msg.key, _msg.val
+                        self.writer_client, key.name, val
                     );
                 }
                 vec![input]
-            } // forward to server
-
-            EMsg::WriteResponse(_resp) => {
-                #[cfg(feature = "verbose")]
-                info!(
-                    "{} WriteResponse: {} -> success={}",
-                    self.writer_client, _resp.key, _resp.success
-                );
-                vec![]
             }
 
-            _ => panic!("Writer got unexpected message"),
+            EMsg::ClientResponse(_resp) => {
+                #[cfg(feature = "verbose")]
+                if let CommandResult::Set { key, status } = &_resp.cmd_result {
+                    info!(
+                        "{} WriteResponse: {} -> success={}",
+                        self.writer_client, key.name, status
+                    );
+                }
+                vec![]
+            } // _ => panic!("Writer got unexpected message"),
         }
     }
 }
@@ -89,7 +107,7 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
         match &output {
-            EMsg::WriteRequest(_) => RouteTo::from(self.server.as_str()),
+            EMsg::ClientRequest(_) => RouteTo::from(self.server.as_str()),
             _ => panic!("Writer tried to send non WriteRequest"),
         }
     }

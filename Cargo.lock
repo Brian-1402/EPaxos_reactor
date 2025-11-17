@@ -603,7 +603,7 @@ dependencies = [
 [[package]]
 name = "reactor-actor"
 version = "0.1.0"
-source = "git+https://github.com/satyamjay-iitd/reactor/?branch=master#224468d2a0bc31c84fa28d82d252b0b496f75b94"
+source = "git+https://github.com/satyamjay-iitd/reactor?branch=master#224468d2a0bc31c84fa28d82d252b0b496f75b94"
 dependencies = [
  "anyhow",
  "bincode",
@@ -626,7 +626,7 @@ dependencies = [
 [[package]]
 name = "reactor-macros"
 version = "0.1.0"
-source = "git+https://github.com/satyamjay-iitd/reactor/?branch=master#224468d2a0bc31c84fa28d82d252b0b496f75b94"
+source = "git+https://github.com/satyamjay-iitd/reactor?branch=master#224468d2a0bc31c84fa28d82d252b0b496f75b94"
 dependencies = [
  "bytes",
  "proc-macro2",

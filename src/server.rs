@@ -1,4 +1,4 @@
-use crate::common::{EMsg, ReadResponse, WriteResponse};
+use crate::common::{ClientResponse, Command, CommandResult, EMsg};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -17,21 +17,27 @@ impl reactor_actor::ActorProcess for Processor {
 
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
-            EMsg::ReadRequest(msg) => {
-                let val = self.data.get(&msg.key).cloned();
-                vec![EMsg::ReadResponse(ReadResponse {
-                    msg_id: msg.msg_id.clone(),
-                    key: msg.key.clone(),
-                    val,
-                })]
-            }
+            EMsg::ClientRequest(msg) => {
+                let cmd_result = match &msg.cmd {
+                    Command::Get { key } => {
+                        let val = self.data.get(&key.name).cloned();
+                        CommandResult::Get {
+                            key: key.clone(),
+                            val,
+                        }
+                    }
+                    Command::Set { key, val } => {
+                        self.data.insert(key.name.clone(), val.clone());
+                        CommandResult::Set {
+                            key: key.clone(),
+                            status: true,
+                        }
+                    }
+                };
 
-            EMsg::WriteRequest(msg) => {
-                self.data.insert(msg.key.clone(), msg.val.clone());
-                vec![EMsg::WriteResponse(WriteResponse {
+                vec![EMsg::ClientResponse(ClientResponse {
                     msg_id: msg.msg_id.clone(),
-                    key: msg.key.clone(),
-                    success: true,
+                    cmd_result,
                 })]
             }
             _ => {
@@ -55,9 +61,9 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, _output: &Self::OMsg) -> RouteTo<'a> {
         match &_output {
-            EMsg::ReadResponse(_) | EMsg::WriteResponse(_) => RouteTo::Reply,
+            EMsg::ClientResponse(_) => RouteTo::Reply,
             _ => {
-                panic!("Server tried to send non ReadResponse")
+                panic!("Server tried to send non ClientResponse")
             }
         }
     }

@@ -1,5 +1,5 @@
 use crate::SLEEP_MS;
-use crate::common::{EMsg, ReadRequest};
+use crate::common::{ClientRequest, Command, CommandResult, EMsg, Variable};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -25,10 +25,16 @@ impl Iterator for ReadReqGenerator {
         if self.count < 10 {
             std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
             self.count += 1;
-            Some(EMsg::ReadRequest(ReadRequest {
+            let cmd = Command::Get {
+                key: Variable {
+                    name: "key1".to_string(),
+                },
+                // key: Variable(format!("foo{}", self.count)),
+            };
+            Some(EMsg::ClientRequest(ClientRequest {
+                client_id: self.addr.clone(),
                 msg_id: format!("{}_r_{}", self.addr, self.count),
-                key: "key1".to_string(),
-                // key: format!("foo{}", self.count),
+                cmd,
             }))
         } else {
             None
@@ -54,29 +60,25 @@ impl reactor_actor::ActorProcess for Processor {
 
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
-            // For CR read client, it gets CRReadRequest messages from the generator
-            // and just directly sends to the Actor::Sender
-            EMsg::ReadRequest(_msg) => {
+            EMsg::ClientRequest(_msg) => {
                 #[cfg(feature = "verbose")]
                 {
-                    info!("{} Getting {}", self.reader_client, _msg.key);
+                    info!("{} Getting {}", self.reader_client, _msg.cmd.key().name);
                 }
                 vec![input]
             }
 
-            EMsg::ReadResponse(_msg) => {
+            EMsg::ClientResponse(_msg) => {
                 #[cfg(feature = "verbose")]
-                info!(
-                    "{} Get {} = {}",
-                    self.reader_client,
-                    _msg.key,
-                    _msg.val.as_deref().unwrap_or("NONE")
-                );
+                if let CommandResult::Get { key, val } = &_msg.cmd_result {
+                    info!(
+                        "{} Get {} = {}",
+                        self.reader_client,
+                        key.name,
+                        (val).as_deref().unwrap_or("NONE")
+                    );
+                }
                 vec![]
-            }
-
-            _ => {
-                panic!("Reader got an unexpected message")
             }
         }
     }
@@ -97,7 +99,7 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
         match &output {
-            EMsg::ReadRequest(_) => RouteTo::from(self.server.as_str()),
+            EMsg::ClientRequest(_) => RouteTo::from(self.server.as_str()),
             _ => {
                 panic!("Reader tried to send non ReadRequest")
             }
