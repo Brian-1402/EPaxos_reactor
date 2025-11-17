@@ -37,8 +37,16 @@ fn reader(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
 // }
 
 #[actor]
-fn epaxos_server(ctx: RuntimeCtx, _payload: HashMap<String, serde_json::Value>) {
-    RUNTIME.spawn(epaxos_behaviour(ctx));
+fn epaxos_server(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value>) {
+    let replica_list: Vec<String> = payload
+        .remove("replica_list")
+        .expect("replica_list field missing")
+        .as_array()
+        .expect("replica_list must be an array")
+        .iter()
+        .map(|v| v.as_str().expect("replica name must be a string").to_string())
+        .collect::<Vec<String>>();
+    RUNTIME.spawn(epaxos_behaviour(ctx, replica_list));
 }
 
 #[actor]

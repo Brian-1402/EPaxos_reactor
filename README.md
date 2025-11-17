@@ -31,12 +31,9 @@ cargo clippy --fix --allow-dirty --allow-staged -- -A warnings
 
 ## Message types
 
-- Client messages
-  - WriteRequest
-  - WriteResponse
-  - ReadRequest
-  - ReadResponse
-  - RequestAndRead
+- Client messages (see common.rs for definitions)
+  - ClientRequest (wraps Command::Get or Command::Set)
+  - ClientResponse (wraps CommandResult::Get or CommandResult::Set)
 
 - Base server messages
   - PreAccept
@@ -66,22 +63,19 @@ Whats left:
     - `PreAccepted`
     - `Accepted`
     - `Committed`
-  -`quorum_ctr`
-    - extra, not specified in paper
-    - Counter for how many messages received for each phase
-    - Used for PreAcceptOk, AcceptOk
 
 ### `instance_num`
 - Counter which stores latest instance number
 - Incremented each time I get a write request
 
-### `server_list`
-- List of all active servers
+### `replica_list`
+- List of all active replicas
 
 > New possible additions
 
 ### `quorum_ctr`
 - 1d vector indexed by instance number. stores int counter for quorum checking
+- Used for PreAcceptOk, AcceptOk
 
 ### `app_meta`
 > Actually this might be needed in cmds. In explicit prepare, other replicas reply to client on behalf of failed leader
@@ -383,6 +377,3 @@ Template: For each message:
 - What conflicts mean, case by case:
   - For concurrent writes, if the commands arent semantically linked (totally different state variables) or just literally commutative, we
     don't have to care. Both are non-conflicting writes and we can commit both in fast path without issues. Ordering we don't have to care.
-
-
-
