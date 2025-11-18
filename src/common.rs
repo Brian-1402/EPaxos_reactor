@@ -123,6 +123,12 @@ pub struct AcceptMsg {
     pub instance: Instance,
 }
 
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct AcceptOkMsg {
+    // pub cmd: Command,
+    pub instance: Instance,
+}
+
 #[derive(Encode, Decode, Debug, Clone, DefaultPrio, DeriveMsg)]
 pub enum EMsg {
     ClientRequest(ClientRequest),
@@ -131,6 +137,7 @@ pub enum EMsg {
     PreAcceptOk(PreAcceptOkMsg),
     Commit(CommitMsg),
     Accept(AcceptMsg),
+    AcceptOk(AcceptOkMsg),
     // ReadRequest(ReadRequest),
     // WriteRequest(WriteRequest),
     // ReadResponse(ReadResponse),

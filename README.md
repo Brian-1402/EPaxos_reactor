@@ -255,6 +255,7 @@ Template: For each message:
 ##### Output
 - `AcceptOk`
   payload: ($\gamma$, $Inst(L,i_L)$)
+  - here, can avoid sending $\gamma$. Leader already has it similar to preAcceptOk
 ##### Send to
 - L, where it came from
 
@@ -267,8 +268,9 @@ Template: For each message:
 ##### State modifications
   cmds\[L\]\[$i_L$\] - ($\gamma$, `seq`, `deps`, `Committed`, 0)
 ##### Output
-  - `Commit`
-    payload: ($\gamma$, `seq`, `deps`, $Inst(L,i_L)$)
+  - If ctr == $\lfloor N / 2 \rfloor$ 
+    - `Commit`
+      payload: ($\gamma$, `seq`, `deps`, $Inst(L,i_L)$)
 ##### Send to
   - Broadcast to every replica
 
@@ -281,7 +283,7 @@ Template: For each message:
   - instance number at leader `i_L`
 ##### State modifications:
 - cmds\[L\]\[$i_L$\] - ($\gamma$, `seq`, `deps`, `Committed`, 0, `L`)
-##### Additional code logic
+##### Additional code logic <!-- Not implemented yet -->
 - If there's a read request whose leader myself R is waiting for this commit, continue the execution algorithm and if need to wait for
   another commit, then move on. Otherwise, if execution is finished, give read response to client
 ##### Output

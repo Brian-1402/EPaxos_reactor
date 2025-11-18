@@ -1,4 +1,4 @@
-use crate::common::{Command, EMsg, Variable, Instance, PreAcceptMsg, PreAcceptOkMsg, AcceptMsg, CommitMsg};
+use crate::common::{Command, EMsg, Variable, Instance, PreAcceptMsg, PreAcceptOkMsg, AcceptMsg, AcceptOkMsg, CommitMsg};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -38,7 +38,8 @@ struct Processor {
     cmds: HashMap<String, Vec<Option<CmdEntry>>>,
 
     instance_num: u64,
-    quorum_ctr: Vec<u32>,       // Indexed by instance number
+    quorum_ctr: Vec<u32>,       // Counter for PreAcceptOk messages, // Indexed by instance number
+    accept_ok_ctr: Vec<u32>,   // Counter for AcceptOk messages
     app_meta: Vec<CmdMetadata>, // Indexed by instance number
 
     replica_list: Vec<String>,
@@ -188,7 +189,10 @@ impl reactor_actor::ActorProcess for Processor {
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
 
-                // should we check if this replica is same as replica name just to ensure that preAccept comes to leader only?
+                // should we check if this replica is same as replica name just to ensure that preAcceptok comes to leader only?
+                if msg.instance.replica != self.replica_name {
+                    return vec![];
+                }
 
                 // Ensure the command exists in the log
                 let cmd_entry_mut = self.cmds.get_mut(&replica).unwrap()
@@ -219,11 +223,6 @@ impl reactor_actor::ActorProcess for Processor {
                 let ctr = self.quorum_ctr[inst_num as usize];
                 let majority = (self.replica_list.len() / 2) as u32;
                 let fast_quorum = (self.replica_list.len() - 1) as u32; // using unoptimized fast path quorum
-                
-                let inst = Instance {
-                    replica: self.replica_name.clone(),
-                    instance_num: self.instance_num,
-                };
 
                 // Check if majority is reached
                 if ctr == majority {
@@ -236,7 +235,7 @@ impl reactor_actor::ActorProcess for Processor {
                             cmd: cmd_entry_mut.cmd.clone(),
                             seq: cmd_entry_mut.seq,
                             deps: cmd_entry_mut.deps.clone(),
-                            instance: inst.clone(),
+                            instance: msg.instance.clone(),
                         });
                         return vec![accept_msg];
                     } else {
@@ -256,7 +255,7 @@ impl reactor_actor::ActorProcess for Processor {
                             cmd: cmd_entry_mut.cmd.clone(),
                             seq: cmd_entry_mut.seq,
                             deps: cmd_entry_mut.deps.clone(),
-                            instance: inst.clone(),
+                            instance: msg.instance.clone(),
                         });
                         return vec![commit_msg];
                     } else {
@@ -264,6 +263,100 @@ impl reactor_actor::ActorProcess for Processor {
                     }
                 }
 
+                vec![]
+            }
+            EMsg::Commit(msg) => {
+                let replica = msg.instance.replica.clone();
+                let inst_num = msg.instance.instance_num;
+
+                // Step 1: Resize the cmds array for the given replica
+                self.resize_cmds((inst_num + 1) as usize, &replica);
+
+                // Step 2: Create a new CmdEntry with the Committed status
+                let cmd_entry = CmdEntry {
+                    cmd: msg.cmd.clone(),
+                    seq: msg.seq,
+                    deps: msg.deps.clone(),
+                    status: CmdStatus::Committed,
+                };
+
+                // Step 3: Insert the CmdEntry into the cmds array
+                self.cmds
+                    .get_mut(&replica)
+                    .unwrap()
+                    .insert(inst_num as usize, Some(cmd_entry));
+                
+                vec![]
+            }
+            EMsg::Accept(msg) => {
+                let replica = msg.instance.replica.clone();
+                let inst_num = msg.instance.instance_num;
+
+                // Step 1: Resize the cmds array for the given replica
+                self.resize_cmds((inst_num + 1) as usize, &replica);
+
+                let cmd_entry = CmdEntry {
+                    cmd: msg.cmd.clone(),
+                    seq: msg.seq,
+                    deps: msg.deps.clone(),
+                    status: CmdStatus::Accepted,
+                };
+
+                // Step 2: Create or update the CmdEntry with the Accepted status
+                self.cmds
+                    .get_mut(&replica)
+                    .unwrap()
+                    .insert(inst_num as usize, Some(cmd_entry));
+
+                // Step 3: Prepare and send AcceptOk message
+                let accept_ok_msg = EMsg::AcceptOk(AcceptOkMsg {
+                    instance: msg.instance.clone(),
+                });
+
+                vec![accept_ok_msg]
+            }
+            EMsg::AcceptOk(msg) => {
+                let replica = msg.instance.replica.clone();
+                let inst_num = msg.instance.instance_num;
+
+                // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
+                if msg.instance.replica != self.replica_name {
+                    return vec![];
+                }
+
+                // Ensure the command exists in the log
+                let cmd_entry_mut = self.cmds.get_mut(&replica).unwrap()
+                    .get_mut(inst_num as usize).unwrap()
+                    .as_mut().expect("Command not found in log");
+
+                // Check if already committed
+                if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
+                    return vec![]; // Ignore the message
+                }
+
+                // Increment the counter for AcceptOk messages
+                if self.accept_ok_ctr.len() <= inst_num as usize {
+                    self.accept_ok_ctr.resize(inst_num as usize + 1, 0);
+                }
+                self.accept_ok_ctr[inst_num as usize] += 1;
+
+                let ctr = self.accept_ok_ctr[inst_num as usize];
+                let majority = (self.replica_list.len() / 2) as u32;
+
+                // Check if majority is reached
+                if ctr == majority {
+                    // Commit phase
+                    cmd_entry_mut.status = CmdStatus::Committed;
+
+                    let commit_msg = EMsg::Commit(CommitMsg {
+                        cmd: cmd_entry_mut.cmd.clone(),
+                        seq: cmd_entry_mut.seq,
+                        deps: cmd_entry_mut.deps.clone(),
+                        instance: msg.instance.clone(),
+                    });
+
+                    return vec![commit_msg];
+                }
                 vec![]
             }
             _ => {
@@ -285,6 +378,7 @@ impl Processor {
             cmds,
             instance_num: 0,
             quorum_ctr: vec![],
+            accept_ok_ctr: vec![],
             app_meta: vec![],
             replica_list,
             replica_name,
@@ -313,7 +407,7 @@ impl reactor_actor::ActorSend for Sender {
 
                 RouteTo::Multiple(std::borrow::Cow::Owned(dests))
             }
-            EMsg::PreAcceptOk(_) => RouteTo::Reply,
+            EMsg::PreAcceptOk(_) | EMsg::AcceptOk(_) => RouteTo::Reply,
             _ => {
                 panic!("Server tried to send non ClientResponse")
             }
