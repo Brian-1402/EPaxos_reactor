@@ -1,4 +1,15 @@
-use crate::common::{Command, EMsg, Variable, Instance, PreAcceptMsg, PreAcceptOkMsg, AcceptMsg, AcceptOkMsg, CommitMsg};
+use crate::common::{Command, 
+    EMsg, 
+    Variable, 
+    Instance, 
+    PreAcceptMsg, 
+    PreAcceptOkMsg, 
+    AcceptMsg, 
+    AcceptOkMsg, 
+    CommitMsg, 
+    ClientResponse,
+    CommandResult
+};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
@@ -114,41 +125,55 @@ impl reactor_actor::ActorProcess for Processor {
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
             EMsg::ClientRequest(msg) => {
-                let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
-                let vec_size = cmds_entry.len();
-                if vec_size > 0 {
-                    self.instance_num += 1;
+                match &msg.cmd {
+                    Command::Set { .. } => {
+                        let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
+                        let vec_size = cmds_entry.len();
+                        if vec_size > 0 {
+                            self.instance_num += 1;
+                        }
+                        let inst_num = self.instance_num;
+
+                        self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
+
+                        let cmd_entry = CmdEntry {
+                            cmd: msg.cmd.clone(),
+                            seq: 0,
+                            deps: HashSet::new(),
+                            status: CmdStatus::PreAccepted,
+                        };
+                        cmds_entry.push(Some(cmd_entry));
+                        self.get_interfs(self.replica_name.clone(), inst_num);
+
+                        // Store client metadata in app_meta
+                        self.app_meta.push(CmdMetadata {
+                            client_id: msg.client_id.clone(),
+                            msg_id: msg.msg_id.clone(),
+                        });
+
+                        let inst = Instance {
+                            replica: self.replica_name.clone(),
+                            instance_num: inst_num,
+                        };
+
+                        let entry = self.cmds[&self.replica_name][inst_num as usize]
+                        .as_ref()
+                        .unwrap();
+
+                        let pre_accept = EMsg::PreAccept(PreAcceptMsg {
+                            cmd: entry.cmd.clone(),
+                            seq: entry.seq,
+                            deps: entry.deps.clone(),
+                            instance: inst.clone(),
+                        });
+                        
+                        vec![pre_accept]
+                    }
+                    Command::Get { .. } => {
+                        // Handle Read Request (to be implemented later)
+                        vec![]
+                    }
                 }
-                let inst_num = self.instance_num;
-
-                self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
-
-                let cmd_entry = CmdEntry {
-                    cmd: msg.cmd.clone(),
-                    seq: 0,
-                    deps: HashSet::new(),
-                    status: CmdStatus::PreAccepted,
-                };
-                cmds_entry.push(Some(cmd_entry));
-                self.get_interfs(self.replica_name.clone(), inst_num);
-
-                let inst = Instance {
-                    replica: self.replica_name.clone(),
-                    instance_num: inst_num,
-                };
-
-                let entry = self.cmds[&self.replica_name][inst_num as usize]
-                .as_ref()
-                .unwrap();
-
-                let pre_accept = EMsg::PreAccept(PreAcceptMsg {
-                    cmd: entry.cmd.clone(),
-                    seq: entry.seq,
-                    deps: entry.deps.clone(),
-                    instance: inst.clone(),
-                });
-                
-                vec![pre_accept]
             }
             EMsg::PreAccept(msg) => {
                 let replica = msg.instance.replica.clone();
@@ -264,7 +289,27 @@ impl reactor_actor::ActorProcess for Processor {
                             deps: cmd_entry_mut.deps.clone(),
                             instance: msg.instance.clone(),
                         });
-                        return vec![commit_msg];
+
+                        // Only for write commands (Set)
+                        if matches!(cmd_entry_mut.cmd, Command::Set { .. }) {
+                            let client_meta = &self.app_meta[inst_num as usize];
+
+                            let client_response = EMsg::ClientResponse(ClientResponse {
+                                msg_id: client_meta.msg_id.clone(),
+                                client_id: client_meta.client_id.clone(),
+                                cmd_result: CommandResult::Set {
+                                    key: cmd_entry_mut.cmd.key().clone(),
+                                    status: true,
+                                },
+                            });
+
+                            return vec![
+                                commit_msg,
+                                client_response, // send to correct client
+                            ];
+                        } else {
+                            return vec![commit_msg];
+                        }
                     } else {
                         panic!("Quorum intersection invariant violated");
                     }
@@ -399,7 +444,11 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, _output: &Self::OMsg) -> RouteTo<'a> {
         match &_output {
-            EMsg::ClientResponse(_) => RouteTo::Reply,
+            EMsg::ClientResponse(response) => {
+                // Use client_id to route the message to the correct client
+                let client_id = &response.client_id; // Assuming msg_id contains client_id
+                RouteTo::Single(std::borrow::Cow::Owned(client_id.clone()))
+            }
             EMsg::PreAccept(_) | EMsg::Accept(_) | EMsg::Commit(_) => {
                 // Broadcast PreAccept to all replicas except itself
                 let dests: Vec<String> = self.replica_list

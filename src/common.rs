@@ -82,6 +82,7 @@ impl CommandResult {
 #[derive(Encode, Decode, Debug, Clone)]
 pub struct ClientResponse {
     pub msg_id: String,
+    pub client_id: String,
     pub cmd_result: CommandResult,
 }
 
