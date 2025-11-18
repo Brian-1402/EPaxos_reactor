@@ -88,7 +88,7 @@ pub struct ClientResponse {
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instance {
     pub replica: String,
-    pub instance_num: u64,
+    pub instance_num: usize,
 }
 
 #[derive(Encode, Decode, Debug, Clone)]

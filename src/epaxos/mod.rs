@@ -1,9 +1,14 @@
-use crate::common::{Command, EMsg, Variable, Instance, PreAcceptMsg, PreAcceptOkMsg, AcceptMsg, AcceptOkMsg, CommitMsg};
+use crate::common::{
+    AcceptMsg, AcceptOkMsg, ClientRequest, Command, CommitMsg, EMsg, Instance, PreAcceptMsg,
+    PreAcceptOkMsg, Variable,
+};
 use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
+use core::panic;
 use std::collections::{HashMap, HashSet};
 use std::vec;
+use tracing::{debug, error, info, warn};
 
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Processor
@@ -37,8 +42,9 @@ struct Processor {
     // cmds: HashMap<String, Vec<CmdInstance>>,
     cmds: HashMap<String, Vec<Option<CmdEntry>>>,
 
-    instance_num: u64,
-    quorum_ctr: Vec<u32>,       // Counter for PreAcceptOk messages, // Indexed by instance number
+    // instance_num: u64,
+    instance_num: usize,
+    quorum_ctr: Vec<u32>, // Counter for PreAcceptOk messages, // Indexed by instance number
     app_meta: Vec<CmdMetadata>, // Indexed by instance number
 
     replica_list: Vec<String>,
@@ -46,6 +52,13 @@ struct Processor {
 }
 
 impl Processor {
+    fn get_majority(&self) -> u32 {
+        (self.replica_list.len() / 2) as u32
+    }
+
+    fn fast_quorum(&self) -> u32 {
+        (self.replica_list.len() - 1) as u32
+    }
     // for given new size and replica, increase the cmds[replica] vector to that size with empty values in extra slots
     fn resize_cmds(&mut self, new_size: usize, replica: &String) {
         let cmds_for_replica = self.cmds.get_mut(replica).expect("replica not found");
@@ -55,56 +68,55 @@ impl Processor {
         }
     }
 
+    fn cmds_insert(&mut self, instance: &Instance, cmd_entry: CmdEntry) {
+        let index = instance.instance_num;
+        let required_size = index + 1;
+
+        self.resize_cmds(required_size, &instance.replica);
+
+        let cmds_for_replica = self
+            .cmds
+            .get_mut(&instance.replica)
+            .expect("Internal error: Replica vector should exist after initialization.");
+
+        let position = cmds_for_replica
+            .get_mut(index)
+            .expect("Index should be valid after resize_cmds was called.");
+
+        match position {
+            None => {
+                *position = Some(cmd_entry);
+            }
+            Some(_) => {
+                panic!("Slot occupied");
+            }
+        }
+    }
     // used to get deps of a given cmd entry
     // iterates through all CmdInstance present in cmds for all replicas, and if key is same,
     // add it to cmd_entry deps
-    // fn get_interfs(&self, cmd_entry: &mut CmdEntry) {
-    fn get_interfs(&mut self, replica: String, inst_num: u64) {
-        // Step 1: read-only borrow to compute deps and calculate max seq
-        let (deps, max_seq) = {
-            let mut deps = HashSet::new();
-            let mut max_seq = 0;
-    
-            let cmd = self.cmds[&replica][inst_num as usize]
-                .as_ref()
-                .unwrap()
-                .cmd
-                .clone();
-    
-            for (r, cmds_vec) in &self.cmds {
-                for (i, cmd_opt) in cmds_vec.iter().enumerate() {
-                    if let Some(c) = cmd_opt {
-                        if c.cmd.conflicts_with(&cmd) {
-                            deps.insert(Instance {
-                                replica: r.clone(),
-                                instance_num: i as u64,
-                            });
-                            // Update max_seq with the maximum seq value from the dependency
-                            max_seq = max_seq.max(c.seq);
-                        }
+    fn get_interfs(&self, cmd: &Command) -> (HashSet<Instance>, u64) {
+        let mut deps = HashSet::new();
+        let mut max_seq = 0;
+
+        for (r, cmds_vec) in &self.cmds {
+            for (i, cmd_opt) in cmds_vec.iter().enumerate() {
+                if let Some(c) = cmd_opt {
+                    if c.cmd.conflicts_with(&cmd) {
+                        deps.insert(Instance {
+                            replica: r.clone(),
+                            instance_num: i,
+                        });
+                        // Update max_seq with the maximum seq value from the dependency
+                        max_seq = max_seq.max(c.seq);
                     }
                 }
             }
-    
-            (deps, max_seq)
-        };
-    
-        // Step 2: mutable borrow only after reading is done
-        let cmd_entry = self
-            .cmds
-            .get_mut(&replica)
-            .unwrap()
-            .get_mut(inst_num as usize)
-            .unwrap()
-            .as_mut()
-            .unwrap();
-    
-        cmd_entry.seq = cmd_entry.seq.max(1 + max_seq);
-    
-        cmd_entry.deps.extend(deps);
+        }
+
+        max_seq += 1; // incrementing max_seq before returning
+        return (deps, max_seq);
     }
-        
-        
 }
 
 impl reactor_actor::ActorProcess for Processor {
@@ -112,137 +124,155 @@ impl reactor_actor::ActorProcess for Processor {
     type OMsg = EMsg;
 
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
-        match &input {
+        match input {
             EMsg::ClientRequest(msg) => {
-                let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
-                let vec_size = cmds_entry.len();
+                let ClientRequest { cmd, .. } = msg;
+
+                // Purely for checking starting case where inst_num is already 0, no need to increment
+                let vec_size = self.cmds.get(&self.replica_name).unwrap().len();
                 if vec_size > 0 {
                     self.instance_num += 1;
                 }
-                let inst_num = self.instance_num;
 
                 self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
 
+                let (deps, seq) = self.get_interfs(&cmd);
+
                 let cmd_entry = CmdEntry {
-                    cmd: msg.cmd.clone(),
-                    seq: 0,
-                    deps: HashSet::new(),
+                    cmd: cmd.clone(),
+                    seq,
+                    deps: deps.clone(),
                     status: CmdStatus::PreAccepted,
                 };
-                cmds_entry.push(Some(cmd_entry));
-                self.get_interfs(self.replica_name.clone(), inst_num);
 
-                let inst = Instance {
+                let cmds_vec = self.cmds.get_mut(&self.replica_name).unwrap();
+                cmds_vec.push(Some(cmd_entry));
+
+                let instance = Instance {
                     replica: self.replica_name.clone(),
-                    instance_num: inst_num,
+                    instance_num: self.instance_num,
                 };
-
-                let entry = self.cmds[&self.replica_name][inst_num as usize]
-                .as_ref()
-                .unwrap();
 
                 let pre_accept = EMsg::PreAccept(PreAcceptMsg {
-                    cmd: entry.cmd.clone(),
-                    seq: entry.seq,
-                    deps: entry.deps.clone(),
-                    instance: inst.clone(),
+                    cmd,
+                    seq,
+                    deps,
+                    instance,
                 });
-                
+
                 vec![pre_accept]
             }
-            EMsg::PreAccept(msg) => {
-                let replica = msg.instance.replica.clone();
-                let inst_num = msg.instance.instance_num;
 
-                // Ensure the cmds log can accommodate the incoming instance
-                self.resize_cmds((inst_num + 1) as usize, &replica);
+            EMsg::PreAccept(msg) => {
+                let PreAcceptMsg {
+                    cmd,
+                    seq,
+                    deps,
+                    instance,
+                } = msg;
+
+                // Get Interfering instances and max seq, check with incoming msg and update
+                let (mut interf_deps, mut interf_seq) = self.get_interfs(&cmd);
+                interf_deps.extend(deps.into_iter());
+                interf_seq = interf_seq.max(seq);
 
                 // Add the incoming command to the cmds log
                 let cmd_entry = CmdEntry {
-                    cmd: msg.cmd.clone(),
-                    seq: msg.seq,
-                    deps: msg.deps.clone(),
+                    cmd,
+                    seq: interf_seq,
+                    deps: interf_deps.clone(),
                     status: CmdStatus::PreAccepted,
                 };
-
                 // Add the incoming command to the cmds log
-                self.cmds
-                    .get_mut(&replica)
-                    .unwrap()
-                    .insert(inst_num as usize, Some(cmd_entry));
-
-                // Update seq and deps using get_interfs
-                self.get_interfs(replica.clone(), inst_num);
+                self.cmds_insert(&instance, cmd_entry);
 
                 // Prepare and send PreAcceptOk message
-                let entry = self.cmds[&replica][inst_num as usize]
-                    .as_ref()
-                    .unwrap();
-                
                 let pre_accept_ok = EMsg::PreAcceptOk(PreAcceptOkMsg {
-                    seq: entry.seq,
-                    deps: entry.deps.clone(),
-                    instance: msg.instance.clone(),
+                    seq: interf_seq,
+                    deps: interf_deps,
+                    instance,
                 });
 
                 vec![pre_accept_ok]
             }
             EMsg::PreAcceptOk(msg) => {
-                let replica = msg.instance.replica.clone();
-                let inst_num = msg.instance.instance_num;
+                let PreAcceptOkMsg {
+                    seq,
+                    deps,
+                    instance,
+                } = msg;
+
+                let Instance {
+                    replica,
+                    instance_num: inst_num,
+                } = instance.clone();
 
                 // should we check if this replica is same as replica name just to ensure that preAcceptok comes to leader only?
-                if msg.instance.replica != self.replica_name {
+                if replica != self.replica_name {
+                    error!("PreAcceptOk received by non-leader replica");
                     return vec![];
                 }
 
+                // Defining quorum constants
+                let majority = self.get_majority();
+                let fast_quorum = self.fast_quorum();
+
                 // Ensure the command exists in the log
-                let cmd_entry_mut = self.cmds.get_mut(&replica).unwrap()
-                    .get_mut(inst_num as usize).unwrap()
-                    .as_mut().expect("Command not found in log");
+                let cmd_entry_mut: &mut CmdEntry = self
+                    .cmds
+                    .get_mut(&replica)
+                    .unwrap()
+                    .get_mut(inst_num)
+                    .unwrap()
+                    .as_mut()
+                    .expect("Command not found in log");
 
                 // Check if already committed
                 if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
+                    debug!("PreAcceptOk received for already committed command");
                     return vec![]; // Ignore the message 
+                    // TODO: Can add optional debug checks to prove invariance that newer messages would not have unseen interfering commands
                 }
 
                 // Check if accepted
-                let majority = (self.replica_list.len() / 2) as u32;
                 if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
                     // Ensure quorum counter is less than majority
-                    if self.quorum_ctr.len() > inst_num as usize && self.quorum_ctr[inst_num as usize] >= majority {
+                    if self.quorum_ctr[inst_num] >= majority {
+                        debug!(
+                            "PreAcceptOk received for already accepted command with sufficient quorum"
+                        );
                         return vec![]; // Ignore the message if already accepted and quorum is reached
+                        // TODO: Again, same invariant of no conflict possible
                     }
                 }
 
                 // Check if seq and deps match
-                if cmd_entry_mut.seq != msg.seq || cmd_entry_mut.deps != msg.deps {
-
+                if cmd_entry_mut.seq != seq || cmd_entry_mut.deps != deps {
                     // Update seq and deps
-                    cmd_entry_mut.seq = cmd_entry_mut.seq.max(msg.seq);
-                    cmd_entry_mut.deps.extend(msg.deps.clone());
+                    cmd_entry_mut.seq = cmd_entry_mut.seq.max(seq);
+                    cmd_entry_mut.deps.extend(deps.into_iter());
                     cmd_entry_mut.status = CmdStatus::Accepted;
                 }
 
                 // Increment the counter for PreAcceptOk messages
-                self.quorum_ctr[inst_num as usize] += 1;
+                self.quorum_ctr[inst_num] += 1;
 
-                let ctr = self.quorum_ctr[inst_num as usize];
-                let fast_quorum = (self.replica_list.len() - 1) as u32; // using unoptimized fast path quorum
+                let ctr = self.quorum_ctr[inst_num];
 
                 // Check if majority is reached
                 if ctr == majority {
-                    if matches!(cmd_entry_mut.status, CmdStatus::Accepted) { // check if status is Accepted
+                    if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
+                        // check if status is Accepted
                         // Phase 2: Paxos-Accept
 
                         // Reset quorum counter for reuse
-                        self.quorum_ctr[inst_num as usize] = 0;
+                        self.quorum_ctr[inst_num] = 0;
 
                         let accept_msg = EMsg::Accept(AcceptMsg {
                             cmd: cmd_entry_mut.cmd.clone(),
                             seq: cmd_entry_mut.seq,
                             deps: cmd_entry_mut.deps.clone(),
-                            instance: msg.instance.clone(),
+                            instance: instance,
                         });
                         return vec![accept_msg];
                     } else {
@@ -253,16 +283,17 @@ impl reactor_actor::ActorProcess for Processor {
 
                 // Check if fast quorum is reached
                 if ctr == fast_quorum {
-                    if matches!(cmd_entry_mut.status, CmdStatus::PreAccepted) { // status is PreAccpeted
+                    if matches!(cmd_entry_mut.status, CmdStatus::PreAccepted) {
+                        // status is PreAccpeted
                         // Commit phase
-                        // changing msg status to committed 
+                        // changing msg status to committed
                         cmd_entry_mut.status = CmdStatus::Committed;
 
                         let commit_msg = EMsg::Commit(CommitMsg {
                             cmd: cmd_entry_mut.cmd.clone(),
                             seq: cmd_entry_mut.seq,
                             deps: cmd_entry_mut.deps.clone(),
-                            instance: msg.instance.clone(),
+                            instance: instance.clone(),
                         });
                         return vec![commit_msg];
                     } else {
@@ -273,68 +304,73 @@ impl reactor_actor::ActorProcess for Processor {
                 vec![]
             }
             EMsg::Commit(msg) => {
-                let replica = msg.instance.replica.clone();
-                let inst_num = msg.instance.instance_num;
+                let CommitMsg {
+                    cmd,
+                    seq,
+                    deps,
+                    instance,
+                } = msg;
 
-                // Step 1: Resize the cmds array for the given replica
-                self.resize_cmds((inst_num + 1) as usize, &replica);
-
-                // Step 2: Create a new CmdEntry with the Committed status
+                // Create a new CmdEntry with the Committed status
                 let cmd_entry = CmdEntry {
-                    cmd: msg.cmd.clone(),
-                    seq: msg.seq,
-                    deps: msg.deps.clone(),
+                    cmd: cmd,
+                    seq: seq,
+                    deps: deps,
                     status: CmdStatus::Committed,
                 };
 
-                // Step 3: Insert the CmdEntry into the cmds array
-                self.cmds
-                    .get_mut(&replica)
-                    .unwrap()
-                    .insert(inst_num as usize, Some(cmd_entry));
-                
+                // Insert the CmdEntry into the cmds array
+                self.cmds_insert(&instance, cmd_entry);
+
                 vec![]
             }
             EMsg::Accept(msg) => {
-                let replica = msg.instance.replica.clone();
-                let inst_num = msg.instance.instance_num;
+                let AcceptMsg {
+                    cmd,
+                    seq,
+                    deps,
+                    instance,
+                } = msg;
 
-                // Step 1: Resize the cmds array for the given replica
-                self.resize_cmds((inst_num + 1) as usize, &replica);
-
+                // Create a new CmdEntry with the Accepted status
                 let cmd_entry = CmdEntry {
-                    cmd: msg.cmd.clone(),
-                    seq: msg.seq,
-                    deps: msg.deps.clone(),
+                    cmd: cmd.clone(),
+                    seq: seq,
+                    deps: deps.clone(),
                     status: CmdStatus::Accepted,
                 };
 
-                // Step 2: Create or update the CmdEntry with the Accepted status
-                self.cmds
-                    .get_mut(&replica)
-                    .unwrap()
-                    .insert(inst_num as usize, Some(cmd_entry));
+                // Create or update the CmdEntry with the Accepted status
+                self.cmds_insert(&instance, cmd_entry);
 
-                // Step 3: Prepare and send AcceptOk message
-                let accept_ok_msg = EMsg::AcceptOk(AcceptOkMsg {
-                    instance: msg.instance.clone(),
-                });
+                // Prepare and send AcceptOk message
+                let accept_ok_msg = EMsg::AcceptOk(AcceptOkMsg { instance });
 
                 vec![accept_ok_msg]
             }
             EMsg::AcceptOk(msg) => {
-                let replica = msg.instance.replica.clone();
-                let inst_num = msg.instance.instance_num;
+                let AcceptOkMsg { instance } = msg;
+                let Instance {
+                    replica,
+                    instance_num: inst_num,
+                } = instance.clone();
 
                 // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
-                if msg.instance.replica != self.replica_name {
+                if replica != self.replica_name {
                     return vec![];
                 }
 
+                let majority = self.get_majority();
+
                 // Ensure the command exists in the log
-                let cmd_entry_mut = self.cmds.get_mut(&replica).unwrap()
-                    .get_mut(inst_num as usize).unwrap()
-                    .as_mut().expect("Command not found in log");
+                let cmd_entry_mut = self
+                    .cmds
+                    .get_mut(&replica)
+                    .unwrap()
+                    .get_mut(inst_num)
+                    .unwrap()
+                    .as_mut()
+                    .expect("Command not found in log");
 
                 // Check if already committed
                 if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
@@ -342,10 +378,9 @@ impl reactor_actor::ActorProcess for Processor {
                 }
 
                 // Increment the counter for AcceptOk messages
-                self.quorum_ctr[inst_num as usize] += 1; // reused quorum_ctr
+                self.quorum_ctr[inst_num] += 1; // reused quorum_ctr
 
-                let ctr = self.quorum_ctr[inst_num as usize];
-                let majority = (self.replica_list.len() / 2) as u32;
+                let ctr = self.quorum_ctr[inst_num];
 
                 // Check if majority is reached
                 if ctr == majority {
@@ -356,7 +391,7 @@ impl reactor_actor::ActorProcess for Processor {
                         cmd: cmd_entry_mut.cmd.clone(),
                         seq: cmd_entry_mut.seq,
                         deps: cmd_entry_mut.deps.clone(),
-                        instance: msg.instance.clone(),
+                        instance: instance,
                     });
 
                     return vec![commit_msg];
@@ -402,7 +437,8 @@ impl reactor_actor::ActorSend for Sender {
             EMsg::ClientResponse(_) => RouteTo::Reply,
             EMsg::PreAccept(_) | EMsg::Accept(_) | EMsg::Commit(_) => {
                 // Broadcast PreAccept to all replicas except itself
-                let dests: Vec<String> = self.replica_list
+                let dests: Vec<String> = self
+                    .replica_list
                     .iter()
                     .filter(|r| *r != &self.replica_name)
                     .cloned()
