@@ -45,7 +45,10 @@ clippy:
 fmt:
 	cargo fmt --all
 
-pre_commit: fmt clippy build
+test:
+	cargo test
+
+pre_commit: fmt clippy build test
 
 clean:
 	cargo uninstall reactor_nctrl || true

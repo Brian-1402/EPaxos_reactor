@@ -44,7 +44,11 @@ fn epaxos_server(ctx: RuntimeCtx, mut payload: HashMap<String, serde_json::Value
         .as_array()
         .expect("replica_list must be an array")
         .iter()
-        .map(|v| v.as_str().expect("replica name must be a string").to_string())
+        .map(|v| {
+            v.as_str()
+                .expect("replica name must be a string")
+                .to_string()
+        })
         .collect::<Vec<String>>();
     RUNTIME.spawn(epaxos_behaviour(ctx, replica_list));
 }

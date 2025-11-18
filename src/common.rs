@@ -1,36 +1,6 @@
 use bincode::{Decode, Encode};
 use reactor_macros::{DefaultPrio, Msg as DeriveMsg};
-use std::collections::{HashSet};
-
-// #[derive(Encode, Decode, Debug, Clone)]
-// pub struct ReadRequest {
-//     /// Unique identifier for the request -> Clientname_r/w_requestid
-//     pub client_id: String,
-//     pub msg_id: String,
-//     pub key: String,
-// }
-
-// #[derive(Encode, Decode, Debug, Clone)]
-// pub struct WriteRequest {
-//     pub client_id: String,
-//     pub msg_id: String,
-//     pub key: String,
-//     pub val: String,
-// }
-
-// #[derive(Encode, Decode, Debug, Clone)]
-// pub struct ReadResponse {
-//     pub msg_id: String,
-//     pub key: String,
-//     pub val: Option<String>,
-// }
-
-// #[derive(Encode, Decode, Debug, Clone)]
-// pub struct WriteResponse {
-//     pub msg_id: String,
-//     pub key: String,
-//     pub success: bool,
-// }
+use std::collections::HashSet;
 
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
@@ -82,6 +52,7 @@ impl CommandResult {
 #[derive(Encode, Decode, Debug, Clone)]
 pub struct ClientResponse {
     pub msg_id: String,
+    pub client_id: String,
     pub cmd_result: CommandResult,
 }
 
@@ -138,8 +109,4 @@ pub enum EMsg {
     Commit(CommitMsg),
     Accept(AcceptMsg),
     AcceptOk(AcceptOkMsg),
-    // ReadRequest(ReadRequest),
-    // WriteRequest(WriteRequest),
-    // ReadResponse(ReadResponse),
-    // WriteResponse(WriteResponse),
 }
