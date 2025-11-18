@@ -39,7 +39,6 @@ struct Processor {
 
     instance_num: u64,
     quorum_ctr: Vec<u32>,       // Counter for PreAcceptOk messages, // Indexed by instance number
-    accept_ok_ctr: Vec<u32>,   // Counter for AcceptOk messages
     app_meta: Vec<CmdMetadata>, // Indexed by instance number
 
     replica_list: Vec<String>,
@@ -121,6 +120,9 @@ impl reactor_actor::ActorProcess for Processor {
                     self.instance_num += 1;
                 }
                 let inst_num = self.instance_num;
+
+                self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
+
                 let cmd_entry = CmdEntry {
                     cmd: msg.cmd.clone(),
                     seq: 0,
@@ -199,37 +201,42 @@ impl reactor_actor::ActorProcess for Processor {
                     .get_mut(inst_num as usize).unwrap()
                     .as_mut().expect("Command not found in log");
 
-                // Check if already accepted or committed
-                if matches!(cmd_entry_mut.status, CmdStatus::Accepted | CmdStatus::Committed) {
-                    return vec![]; // Ignore the message
+                // Check if already committed
+                if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
+                    return vec![]; // Ignore the message 
+                }
+
+                // Check if accepted
+                let majority = (self.replica_list.len() / 2) as u32;
+                if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
+                    // Ensure quorum counter is less than majority
+                    if self.quorum_ctr.len() > inst_num as usize && self.quorum_ctr[inst_num as usize] >= majority {
+                        return vec![]; // Ignore the message if already accepted and quorum is reached
+                    }
                 }
 
                 // Check if seq and deps match
-                let mut conflicts = false;
                 if cmd_entry_mut.seq != msg.seq || cmd_entry_mut.deps != msg.deps {
-                    conflicts = true;
 
                     // Update seq and deps
                     cmd_entry_mut.seq = cmd_entry_mut.seq.max(msg.seq);
                     cmd_entry_mut.deps.extend(msg.deps.clone());
+                    cmd_entry_mut.status = CmdStatus::Accepted;
                 }
 
                 // Increment the counter for PreAcceptOk messages
-                if self.quorum_ctr.len() <= inst_num as usize {
-                    self.quorum_ctr.resize(inst_num as usize + 1, 0);
-                }
                 self.quorum_ctr[inst_num as usize] += 1;
 
                 let ctr = self.quorum_ctr[inst_num as usize];
-                let majority = (self.replica_list.len() / 2) as u32;
                 let fast_quorum = (self.replica_list.len() - 1) as u32; // using unoptimized fast path quorum
 
                 // Check if majority is reached
                 if ctr == majority {
-                    if conflicts {
+                    if matches!(cmd_entry_mut.status, CmdStatus::Accepted) { // check if status is Accepted
                         // Phase 2: Paxos-Accept
-                        // changing msg status to accepted 
-                        cmd_entry_mut.status = CmdStatus::Accepted;
+
+                        // Reset quorum counter for reuse
+                        self.quorum_ctr[inst_num as usize] = 0;
 
                         let accept_msg = EMsg::Accept(AcceptMsg {
                             cmd: cmd_entry_mut.cmd.clone(),
@@ -246,7 +253,7 @@ impl reactor_actor::ActorProcess for Processor {
 
                 // Check if fast quorum is reached
                 if ctr == fast_quorum {
-                    if !conflicts {
+                    if matches!(cmd_entry_mut.status, CmdStatus::PreAccepted) { // status is PreAccpeted
                         // Commit phase
                         // changing msg status to committed 
                         cmd_entry_mut.status = CmdStatus::Committed;
@@ -335,12 +342,9 @@ impl reactor_actor::ActorProcess for Processor {
                 }
 
                 // Increment the counter for AcceptOk messages
-                if self.accept_ok_ctr.len() <= inst_num as usize {
-                    self.accept_ok_ctr.resize(inst_num as usize + 1, 0);
-                }
-                self.accept_ok_ctr[inst_num as usize] += 1;
+                self.quorum_ctr[inst_num as usize] += 1; // reused quorum_ctr
 
-                let ctr = self.accept_ok_ctr[inst_num as usize];
+                let ctr = self.quorum_ctr[inst_num as usize];
                 let majority = (self.replica_list.len() / 2) as u32;
 
                 // Check if majority is reached
@@ -378,7 +382,6 @@ impl Processor {
             cmds,
             instance_num: 0,
             quorum_ctr: vec![],
-            accept_ok_ctr: vec![],
             app_meta: vec![],
             replica_list,
             replica_name,
