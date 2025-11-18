@@ -1,4 +1,4 @@
-.PHONY: install install_node install_jobc chaos kill_node node job clean build
+.PHONY: install install_node install_jobc chaos kill_node node job clean build build_debug clippy fmt test pre_commit
 	
 REACTOR_GIT     ?= https://github.com/satyamjay-iitd/reactor.git
 REACTOR_BRANCH  ?= master
@@ -29,6 +29,9 @@ install_jobc:
 build:
 	cargo build --release --features verbose
 
+build_debug:
+	cargo build --features verbose
+
 kill_node:
 	@echo "Killing process on port 3000 if any..."
 	@lsof -ti :3000 | xargs --no-run-if-empty kill
@@ -36,6 +39,9 @@ kill_node:
 node: kill_node install_node build
 	reactor_nctrl --port 3000 target/release
 	
+node_debug: kill_node install_node build_debug
+	RUST_LOG=debug reactor_nctrl --port 3000 target/release
+
 job: install_jobc
 	reactor_jctrl ./epaxos.toml
 

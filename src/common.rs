@@ -1,13 +1,20 @@
 use bincode::{Decode, Encode};
 use reactor_macros::{DefaultPrio, Msg as DeriveMsg};
 use std::collections::HashSet;
+use std::fmt;
 
 #[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
     pub name: String,
 }
 
-#[derive(Encode, Decode, Debug, Clone)]
+impl fmt::Display for Variable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Command {
     Get { key: Variable },
     Set { key: Variable, val: String },
@@ -23,6 +30,15 @@ impl Command {
         match self {
             Command::Get { key } => key,
             Command::Set { key, .. } => key,
+        }
+    }
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Command::Get { key } => write!(f, "Get({})", key),
+            Command::Set { key, val } => write!(f, "Set({},{})", key, val),
         }
     }
 }
@@ -60,6 +76,12 @@ pub struct ClientResponse {
 pub struct Instance {
     pub replica: String,
     pub instance_num: usize,
+}
+
+impl fmt::Display for Instance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Inst({},{})", self.replica, self.instance_num)
+    }
 }
 
 #[derive(Encode, Decode, Debug, Clone)]

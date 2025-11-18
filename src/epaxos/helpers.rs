@@ -1,16 +1,19 @@
 use crate::common::{Command, Instance};
 use crate::epaxos::{CmdEntry, Processor};
+use core::panic;
 use std::collections::HashSet;
 
-// use tracing::{debug, error};
+// use tracing::{error};
 
 impl Processor {
     pub fn get_majority(&self) -> u32 {
-        (self.replica_list.len() / 2) as u32
+        let res = (self.replica_list.len() / 2) as u32;
+        if res < 1 { 1 } else { res }
     }
 
     pub fn fast_quorum(&self) -> u32 {
-        (self.replica_list.len() - 1) as u32
+        let res = (self.replica_list.len() as i32) - 2;
+        if res < 1 { 1 } else { res as u32 }
     }
     // for given new size and replica, increase the cmds[replica] vector to that size with empty values in extra slots
     pub fn resize_cmds(&mut self, new_size: usize, replica: &String) {
@@ -40,8 +43,17 @@ impl Processor {
             None => {
                 *position = Some(cmd_entry);
             }
-            Some(_) => {
-                panic!("Slot occupied");
+            Some(existing) => {
+                // check if the existing command is same as cmd_entry
+                if existing.cmd == cmd_entry.cmd {
+                    // replace existing entry in case other fields (seq, deps, status) have changed
+                    *position = Some(cmd_entry);
+                } else {
+                    panic!(
+                        "Slot occupied with different cmd: existing: {}:{:?}, new: {}:{:?}",
+                        self.replica_name, existing.cmd, instance.replica, cmd_entry.cmd
+                    );
+                }
             }
         }
     }

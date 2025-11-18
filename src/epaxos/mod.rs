@@ -3,8 +3,7 @@ use reactor_actor::codec::BincodeCodec;
 use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 
 use std::collections::{HashMap, HashSet};
-use std::vec;
-// use tracing::{debug, error, info, warn};
+// use tracing::info;
 mod handlers;
 mod helpers;
 
@@ -97,8 +96,8 @@ struct Sender {
 impl reactor_actor::ActorSend for Sender {
     type OMsg = EMsg;
 
-    async fn before_send<'a>(&'a mut self, _output: &Self::OMsg) -> RouteTo<'a> {
-        match &_output {
+    async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
+        match &output {
             EMsg::ClientResponse(response) => {
                 // Use client_id to route the message to the correct client
                 let client_id = &response.client_id; // Assuming msg_id contains client_id
@@ -106,13 +105,18 @@ impl reactor_actor::ActorSend for Sender {
             }
             EMsg::PreAccept(_) | EMsg::Accept(_) | EMsg::Commit(_) => {
                 // Broadcast PreAccept to all replicas except itself
-                let dests: Vec<String> = self
+                let mut dests: Vec<String> = self
                     .replica_list
                     .iter()
                     .filter(|r| *r != &self.replica_name)
                     .cloned()
                     .collect();
 
+                if dests.is_empty() {
+                    // send to myself. add myself into dests
+                    dests.push(self.replica_name.clone());
+                }
+                // info!("Broadcasting message to : {:?}", dests);
                 RouteTo::Multiple(std::borrow::Cow::Owned(dests))
             }
             EMsg::PreAcceptOk(_) | EMsg::AcceptOk(_) => RouteTo::Reply,

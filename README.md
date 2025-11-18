@@ -204,6 +204,7 @@ Template: For each message:
     - go to Phase 2
   - if no conflicts seen so far (cmds shows `PreAccepted`):
     - wait for getting fast quorum
+    - check if fast quorum == majority, if no, return fn and wait for more msgs. If yes, continue in code logic, don't return yet.
 - If ctr == fast quorum $F\setminus L$
   - if no conflicts seen so far (cmds shows `PreAccepted`):
     - go to Commit phase

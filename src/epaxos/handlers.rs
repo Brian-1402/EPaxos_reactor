@@ -4,8 +4,7 @@ use crate::common::{
 };
 use crate::epaxos::{CmdEntry, CmdMetadata, CmdStatus, Processor};
 
-use std::vec;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 impl Processor {
     pub fn client_request_handler(&mut self, msg: ClientRequest) -> Vec<EMsg> {
@@ -17,6 +16,7 @@ impl Processor {
 
         match &cmd {
             Command::Set { .. } => {
+                info!("Client Request Set cmd handled: {:?}", cmd);
                 // Purely for checking starting case where inst_num is already 0, no need to increment
                 let vec_size = self.cmds.get(&self.replica_name).unwrap().len();
                 if vec_size > 0 {
@@ -69,6 +69,7 @@ impl Processor {
             deps,
             instance,
         } = msg;
+        info!("{}: PreAccept received for {}", self.replica_name, instance);
 
         // Get Interfering instances and max seq, check with incoming msg and update
         let (mut interf_deps, mut interf_seq) = self.get_interfs(&cmd);
@@ -94,12 +95,17 @@ impl Processor {
 
         vec![pre_accept_ok]
     }
+
     pub fn pre_accept_ok_handler(&mut self, msg: PreAcceptOkMsg) -> Vec<EMsg> {
         let PreAcceptOkMsg {
             seq,
             deps,
             instance,
         } = msg;
+        info!(
+            "{}: PreAcceptOk received for {}",
+            self.replica_name, instance
+        );
 
         let Instance {
             replica,
@@ -116,6 +122,11 @@ impl Processor {
         let majority = self.get_majority();
         let fast_quorum = self.fast_quorum();
 
+        // info!(
+        //     "Majority: {}, Fast Quorum: {} at replica {}",
+        //     majority, fast_quorum, self.replica_name
+        // );
+
         // Ensure the command exists in the log
         let cmd_entry_mut: &mut CmdEntry = self
             .cmds
@@ -128,7 +139,10 @@ impl Processor {
 
         // Check if already committed
         if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
-            debug!("PreAcceptOk received for already committed command");
+            info!(
+                "{}: PreAcceptOk received for already committed command. Ignoring",
+                self.replica_name
+            );
             return vec![]; // Ignore the message 
             // TODO: Can add optional debug checks to prove invariance that newer messages would not have unseen interfering commands
         }
@@ -137,7 +151,10 @@ impl Processor {
         if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
             // Ensure quorum counter is less than majority
             if self.quorum_ctr[inst_num] >= majority {
-                debug!("PreAcceptOk received for already accepted command with sufficient quorum");
+                info!(
+                    "{}: PreAcceptOk received for already accepted command with sufficient quorum. Ignoring",
+                    self.replica_name
+                );
                 return vec![]; // Ignore the message if already accepted and quorum is reached
                 // TODO: Again, same invariant of no conflict possible
             }
@@ -162,6 +179,11 @@ impl Processor {
                 // check if status is Accepted
                 // Phase 2: Paxos-Accept
 
+                info!(
+                    "{}: Paxos Accept Started for {}",
+                    self.replica_name, instance
+                );
+
                 // Reset quorum counter for reuse
                 self.quorum_ctr[inst_num] = 0;
 
@@ -174,7 +196,13 @@ impl Processor {
                 return vec![accept_msg];
             } else {
                 // Wait for fast quorum
-                return vec![];
+                info!(
+                    "{}: Majority reached without conflicts for {}, waiting for Fast Quorum",
+                    self.replica_name, instance
+                );
+                if majority != fast_quorum {
+                    return vec![];
+                }
             }
         }
 
@@ -185,6 +213,10 @@ impl Processor {
                 // Commit phase
                 // changing msg status to committed
                 cmd_entry_mut.status = CmdStatus::Committed;
+                info!(
+                    "{}: Fast Commit started for {}",
+                    self.replica_name, instance
+                );
 
                 let commit_msg = EMsg::Commit(CommitMsg {
                     cmd: cmd_entry_mut.cmd.clone(),
@@ -205,12 +237,17 @@ impl Processor {
                             status: true,
                         },
                     });
+                    info!(
+                        "{}: Sending Client Response for {}",
+                        self.replica_name, instance
+                    );
 
                     return vec![
                         commit_msg,
                         client_response, // send to correct client
                     ];
                 } else {
+                    // TODO: Handle if reads also get fast path
                     return vec![commit_msg];
                 }
             } else {
@@ -227,6 +264,8 @@ impl Processor {
             deps,
             instance,
         } = msg;
+
+        info!("{}: Commit received for {}", self.replica_name, instance);
 
         // Create a new CmdEntry with the Committed status
         let cmd_entry = CmdEntry {
@@ -248,6 +287,8 @@ impl Processor {
             deps,
             instance,
         } = msg;
+
+        info!("{}: Accept received for {}", self.replica_name, instance);
 
         // Create a new CmdEntry with the Accepted status
         let cmd_entry = CmdEntry {
@@ -271,6 +312,8 @@ impl Processor {
             replica,
             instance_num: inst_num,
         } = instance.clone();
+
+        info!("{}: AcceptOk received for {}", self.replica_name, instance);
 
         // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
         if replica != self.replica_name {
