@@ -90,6 +90,9 @@ impl reactor_actor::ActorProcess for Processor {
                 }
                 vec![]
             } // _ => panic!("Writer got unexpected message"),
+            _ => {
+                panic!("Writer got unexpected message")
+            }
         }
     }
 }

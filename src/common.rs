@@ -1,5 +1,6 @@
 use bincode::{Decode, Encode};
 use reactor_macros::{DefaultPrio, Msg as DeriveMsg};
+use std::collections::{HashSet};
 
 // #[derive(Encode, Decode, Debug, Clone)]
 // pub struct ReadRequest {
@@ -84,10 +85,52 @@ pub struct ClientResponse {
     pub cmd_result: CommandResult,
 }
 
+#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Instance {
+    pub replica: String,
+    pub instance_num: u64,
+}
+
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct PreAcceptMsg {
+    pub cmd: Command,
+    pub seq: u64,
+    pub deps: HashSet<Instance>,
+    pub instance: Instance,
+}
+
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct PreAcceptOkMsg {
+    // pub cmd: Command,
+    pub seq: u64,
+    pub deps: HashSet<Instance>,
+    pub instance: Instance,
+}
+
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct CommitMsg {
+    pub cmd: Command,
+    pub seq: u64,
+    pub deps: HashSet<Instance>,
+    pub instance: Instance,
+}
+
+#[derive(Encode, Decode, Debug, Clone)]
+pub struct AcceptMsg {
+    pub cmd: Command,
+    pub seq: u64,
+    pub deps: HashSet<Instance>,
+    pub instance: Instance,
+}
+
 #[derive(Encode, Decode, Debug, Clone, DefaultPrio, DeriveMsg)]
 pub enum EMsg {
     ClientRequest(ClientRequest),
     ClientResponse(ClientResponse),
+    PreAccept(PreAcceptMsg),
+    PreAcceptOk(PreAcceptOkMsg),
+    Commit(CommitMsg),
+    Accept(AcceptMsg),
     // ReadRequest(ReadRequest),
     // WriteRequest(WriteRequest),
     // ReadResponse(ReadResponse),

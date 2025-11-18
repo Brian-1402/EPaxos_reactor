@@ -25,12 +25,27 @@ port = 3000
   actor_name = "reader"
   server = "epaxos1"
   
+  # [[placement.epaxos_server]]
+  # nodename = "node1"
+  # actor_name = "epaxos1"
+  # replica_list = ["epaxos1"]
+  # replicas = 3
+  # replica_list = ["epaxos1", "epaxos2", "epaxos3"]
+
   [[placement.epaxos_server]]
   nodename = "node1"
   actor_name = "epaxos1"
-  replica_list = ["epaxos1"]
-  # replicas = 3
-  # replica_list = ["epaxos1", "epaxos2", "epaxos3"]
+  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
+
+  [[placement.epaxos_server]]
+  nodename = "node1"
+  actor_name = "epaxos2"
+  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
+
+  [[placement.epaxos_server]]
+  nodename = "node1"
+  actor_name = "epaxos3"
+  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
 
   # [[placement.ss]]
   # nodename = "node1"

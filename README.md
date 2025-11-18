@@ -162,7 +162,7 @@ Template: For each message:
 - Local variables:
   - `seq` - update (??)
   - `deps` - update (??)
-- `instance_num` ($i_L$) (?) - increment
+<!-- - `instance_num` ($i_L$) (?) - increment No need to increment -->
 - `cmds\[L\]\[$i_L$\]` - ($\gamma$, `seq`, `deps`, `PreAccepted`, 0)
 
 ##### Output
@@ -187,6 +187,7 @@ Template: For each message:
 
 ##### Phase 1
 - Local variables:
+  - `ctr` - number of PreAcceptOk msgs recieved
   - `L` - myself, the command leader
   - `seq` - check eq with cmds\[L\]\[$i_L$\].`seq`
   - `deps` - check eq with cmds\[L\]\[$i_L$\].`deps`
@@ -194,7 +195,7 @@ Template: For each message:
 - Check if the msg hasn't already been accepted or committed else ignore
 - If eq:
   - cmds\[L\]\[$i_L$\] - ($\gamma$, `seq`, `deps`, `PreAccepted`, ctr+1)
-- If not eq (else):
+- If not eq (else): (conflicts seen)
   - Update `seq` - max()
   - Update `deps` - union()
   - cmds\[L\]\[$i_L$\] - ($\gamma$, `seq`, `deps`, `Accepted`, ctr+1)

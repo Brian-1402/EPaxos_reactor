@@ -80,6 +80,9 @@ impl reactor_actor::ActorProcess for Processor {
                 }
                 vec![]
             }
+            _ => {
+                panic!("Reader got unexpected message")
+            }
         }
     }
 }
