@@ -784,7 +784,6 @@ impl reactor_actor::ActorProcess for Processor {
                 }
                 vec![]
             }
-            
             _ => {
                 panic!("Server got an unexpected message")
             }
