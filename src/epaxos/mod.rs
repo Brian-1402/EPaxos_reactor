@@ -21,7 +21,7 @@ use std::vec;
 // //////////////////////////////////////////////////////////////////////////////
 
 enum CmdStatus {
-    None,
+    // None,
     PreAccepted,
     Accepted,
     Committed,
@@ -92,6 +92,10 @@ impl Processor {
                             continue;
                         }
 
+                        if matches!(c.cmd, Command::Get { .. }) {
+                            continue;
+                        }
+
                         // Skip commands that are already executed
                         if matches!(c.status, CmdStatus::Executed) {
                             continue;
@@ -127,6 +131,7 @@ impl Processor {
         cmd_entry.deps.extend(deps);
     }
 
+    // precondition: all dependencies are either committed or executed
     fn build_dep_graph(&self, root: Instance)
     -> HashMap<Instance, Vec<Instance>>
     {
@@ -313,6 +318,7 @@ impl Processor {
         }
     }
     
+    // precondition: all dependencies are either committed or executed
     fn execute_cmd(&mut self, root: Instance) -> Vec<EMsg> {
         let mut out = Vec::new();
     
@@ -346,9 +352,15 @@ impl Processor {
                             self.mark_executed(&inst);
                         }
                         Command::Get { key } => {
+                            // Check if the current replica is the command leader for this read
+                            if inst.replica != self.replica_name {
+                                continue; // Skip processing if not the command leader
+                            }
                             let val = self.data.get(&key).cloned();
                             let meta = &self.app_meta[inst.instance_num as usize];
-    
+                            // check if an entry exists in app meta for that instance
+                            // send response only if current replica is the command leader of the current read
+                            // otherwise continue TODO
                             out.push(EMsg::ClientResponse(ClientResponse {
                                 msg_id: meta.msg_id.clone(),
                                 client_id: meta.client_id.clone(),
@@ -370,13 +382,16 @@ impl Processor {
         self.pending_reads
             .iter()
             .filter(|read_instance| {
+                // Check if the value matches, not the reference
                 if let Some(read_entry) = self.lookup(read_instance) {
-                    read_entry.deps.contains(write_instance)
+                    read_entry.deps.iter().any(|dep| {
+                        dep.replica == write_instance.replica && dep.instance_num == write_instance.instance_num
+                    })
                 } else {
                     false
                 }
             })
-            .cloned()
+            .cloned() // Clone the instances to return owned values
             .collect()
     }
 
@@ -399,7 +414,43 @@ impl Processor {
 
         true
     }
-    
+
+    // get pending reads list on this particular write from pending_reads struct
+    // This can be done by traversing the pending_reads struct, getting its deps list
+    // and checking if this write cmd exists in the deps list
+    // If the pending reads on this write cmd is none just commit the write msg n move on
+    // If not empty get the deps of this write cmd and if all cmds are existing and status is committed or executed
+    // call execute cmd otherwise just commit n move on
+    // Execute cmd returns out
+    // If out is not empty add it to the vector list of msgs to be sent
+    // check the pending reads list on this write cmd deps again
+    // Now if all the dependency in each read has status committed or executed call execute command on thet read       
+    fn handle_pending_reads(&mut self, instance: &Instance) -> Vec<EMsg> {
+
+        let mut out_msgs = Vec::new();
+            
+        let pending_reads_on_write = self.get_pending_reads(instance);
+        if pending_reads_on_write.is_empty() {
+            // No reads waiting → normal commit
+            return out_msgs;
+        } 
+
+        if self.deps_all_ready(instance) {
+            let mut exec_out = self.execute_cmd(instance.clone()); 
+            out_msgs.append(&mut exec_out);
+        } else {
+            return out_msgs;
+        }
+
+        // 3. Re-check each pending read, execute if ready
+        for read_inst in pending_reads_on_write {
+            if self.deps_all_ready(&read_inst) {
+                let mut exec_out = self.execute_cmd(read_inst);
+                out_msgs.append(&mut exec_out);
+            }
+        }
+        return out_msgs;
+    }    
 }
 
 impl reactor_actor::ActorProcess for Processor {
@@ -409,106 +460,47 @@ impl reactor_actor::ActorProcess for Processor {
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
             EMsg::ClientRequest(msg) => {
-                match &msg.cmd {
-                    Command::Set { .. } => {
-                        let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
-                        let vec_size = cmds_entry.len();
-                        if vec_size > 0 {
-                            self.instance_num += 1;
-                        }
-                        let inst_num = self.instance_num;
-
-                        self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
-
-                        let cmd_entry = CmdEntry {
-                            cmd: msg.cmd.clone(),
-                            seq: 0,
-                            deps: HashSet::new(),
-                            status: CmdStatus::PreAccepted,
-                        };
-                        cmds_entry.push(Some(cmd_entry));
-                        self.get_interfs(self.replica_name.clone(), inst_num);
-
-                        // Store client metadata in app_meta
-                        self.app_meta.push(CmdMetadata {
-                            client_id: msg.client_id.clone(),
-                            msg_id: msg.msg_id.clone(),
-                        });
-
-                        let inst = Instance {
-                            replica: self.replica_name.clone(),
-                            instance_num: inst_num,
-                        };
-
-                        let entry = self.cmds[&self.replica_name][inst_num as usize]
-                        .as_ref()
-                        .unwrap();
-
-                        let pre_accept = EMsg::PreAccept(PreAcceptMsg {
-                            cmd: entry.cmd.clone(),
-                            seq: entry.seq,
-                            deps: entry.deps.clone(),
-                            instance: inst.clone(),
-                        });
-                        
-                        vec![pre_accept]
-                    }
-                    Command::Get { key } => {
-                        let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
-                        let vec_size = cmds_entry.len();
-                        if vec_size == 0 {
-                            // No commands yet, so key doesn't exist
-                            let client_response = EMsg::ClientResponse(ClientResponse {
-                                msg_id: msg.msg_id.clone(),
-                                client_id: msg.client_id.clone(),
-                                cmd_result: CommandResult::Get {
-                                    key: key.clone(),
-                                    val: None
-                                },
-                            });
-                    
-                            return vec![client_response];
-                        } else {
-                            self.instance_num += 1;
-                        }
-                        let inst_num = self.instance_num;
-
-                        self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
-
-                        let cmd_entry = CmdEntry {
-                            cmd: msg.cmd.clone(),
-                            seq: 0,
-                            deps: HashSet::new(),
-                            status: CmdStatus::PreAccepted,
-                        };
-                        cmds_entry.push(Some(cmd_entry));
-                        self.get_interfs(self.replica_name.clone(), inst_num);
-
-                        // Store client metadata in app_meta
-                        self.app_meta.push(CmdMetadata {
-                            client_id: msg.client_id.clone(),
-                            msg_id: msg.msg_id.clone(),
-                        });
-
-                        let inst = Instance {
-                            replica: self.replica_name.clone(),
-                            instance_num: inst_num,
-                        };
-
-                        let entry = self.cmds[&self.replica_name][inst_num as usize]
-                        .as_ref()
-                        .unwrap();
-
-                        let pre_accept = EMsg::PreAccept(PreAcceptMsg {
-                            cmd: entry.cmd.clone(),
-                            seq: entry.seq,
-                            deps: entry.deps.clone(),
-                            instance: inst.clone(),
-                        });
-                        
-                        vec![pre_accept]
-                    }
+                let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
+                let vec_size = cmds_entry.len();
+                if vec_size > 0 {
+                    self.instance_num += 1;
                 }
+                let inst_num = self.instance_num;
+
+                self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
+
+                let cmd_entry = CmdEntry {
+                    cmd: msg.cmd.clone(),
+                    seq: 0,
+                    deps: HashSet::new(),
+                    status: CmdStatus::PreAccepted,
+                };
+                cmds_entry.push(Some(cmd_entry));
+                self.get_interfs(self.replica_name.clone(), inst_num);
+
+                // Store client metadata in app_meta
+                self.app_meta.push(CmdMetadata {
+                    client_id: msg.client_id.clone(),
+                    msg_id: msg.msg_id.clone(),
+                });
+
+                let inst = Instance {
+                    replica: self.replica_name.clone(),
+                    instance_num: inst_num,
+                };
+
+                let entry = self.cmds[&self.replica_name][inst_num as usize]
+                .as_ref()
+                .unwrap();
+
+                let pre_accept = EMsg::PreAccept(PreAcceptMsg {
+                    cmd: entry.cmd.clone(),
+                    seq: entry.seq,
+                    deps: entry.deps.clone(),
+                    instance: inst.clone(),
+                });
+                
+                vec![pre_accept]  
             }
             EMsg::PreAccept(msg) => {
                 let replica = msg.instance.replica.clone();
@@ -638,45 +630,11 @@ impl reactor_actor::ActorProcess for Processor {
                                 },
                             });
 
-                            // get pending reads list on this particular write from pending_reads struct
-                            // This can be done by traversing the pending_reads struct, getting its deps list
-                            // and checking if this write cmd exists in the deps list
-                            // If the pending reads on this write cmd is none just commit the write msg n move on
-                            // If not empty get the deps of this write cmd and if all cmds are existing and status is committed or executed
-                            // call execute cmd otherwise just commit n move on
-                            // Execute cmd returns out
-                            // If out is not empty add it to the vector list of msgs to be sent
-                            // check the pending reads list on this write cmd deps again
-                            // Now if all the dependency in each read has status committed or executed call execute command on thet read
-                            
-                            let mut out_msgs = Vec::new();
-                            
-                            let pending_reads_on_write = self.get_pending_reads(&msg.instance);
-                            if pending_reads_on_write.is_empty() {
-                                // No reads waiting → normal commit
-                                return vec![
-                                    commit_msg,
-                                    client_response, // send to correct client
-                                ];
-                            }                            
-
-                            if self.deps_all_ready(&msg.instance) {
-                                let mut exec_out = self.execute_cmd(msg.instance.clone()); // you will implement
-                                out_msgs.append(&mut exec_out);
-                            } else {
-                                return vec![
-                                    commit_msg,
-                                    client_response, // send to correct client
-                                ];
-                            }
-
-                            // 3. Re-check each pending read, execute if ready
-                            for read_inst in pending_reads_on_write {
-                                if self.deps_all_ready(&read_inst) {
-                                    let mut exec_out = self.execute_cmd(read_inst);
-                                    out_msgs.append(&mut exec_out);
-                                }
-                            }
+                            // put this code block in Commit also TODO
+                            // put all code in one function TODO
+                            // put as many panic statements as possible TODO
+                       
+                            let mut out_msgs = self.handle_pending_reads(&msg.instance);
 
                             let mut final_msgs = vec![commit_msg, client_response];
                             final_msgs.append(&mut out_msgs);
@@ -719,7 +677,15 @@ impl reactor_actor::ActorProcess for Processor {
                     .get_mut(&replica)
                     .unwrap()
                     .insert(inst_num as usize, Some(cmd_entry));
-                
+
+                if matches!(msg.cmd, Command::Set { .. }) {
+                    let mut out_msgs = self.handle_pending_reads(&msg.instance);
+
+                    let mut final_msgs = vec![];
+                    final_msgs.append(&mut out_msgs);
+                    return final_msgs;
+                } 
+
                 vec![]
             }
             EMsg::Accept(msg) => {
@@ -799,45 +765,7 @@ impl reactor_actor::ActorProcess for Processor {
                             },
                         });
 
-                        // get pending reads list on this particular write from pending_reads struct
-                        // This can be done by traversing the pending_reads struct, getting its deps list
-                        // and checking if this write cmd exists in the deps list
-                        // If the pending reads on this write cmd is none just commit the write msg n move on
-                        // If not empty get the deps of this write cmd and if all cmds are existing and status is committed or executed
-                        // call execute cmd otherwise just commit n move on
-                        // Execute cmd returns out
-                        // If out is not empty add it to the vector list of msgs to be sent
-                        // check the pending reads list on this write cmd deps again
-                        // Now if all the dependency in each read has status committed or executed call execute command on thet read
-                        
-                        let mut out_msgs = Vec::new();
-                        
-                        let pending_reads_on_write = self.get_pending_reads(&msg.instance);
-                        if pending_reads_on_write.is_empty() {
-                            // No reads waiting → normal commit
-                            return vec![
-                                commit_msg,
-                                client_response, // send to correct client
-                            ];
-                        }                            
-
-                        if self.deps_all_ready(&msg.instance) {
-                            let mut exec_out = self.execute_cmd(msg.instance.clone()); // you will implement
-                            out_msgs.append(&mut exec_out);
-                        } else {
-                            return vec![
-                                commit_msg,
-                                client_response, // send to correct client
-                            ];
-                        }
-
-                        // 3. Re-check each pending read, execute if ready
-                        for read_inst in pending_reads_on_write {
-                            if self.deps_all_ready(&read_inst) {
-                                let mut exec_out = self.execute_cmd(read_inst);
-                                out_msgs.append(&mut exec_out);
-                            }
-                        }
+                        let mut out_msgs = self.handle_pending_reads(&msg.instance);
 
                         let mut final_msgs = vec![commit_msg, client_response];
                         final_msgs.append(&mut out_msgs);
