@@ -25,27 +25,12 @@ port = 3000
   actor_name = "reader"
   server = "epaxos1"
   
-  # [[placement.epaxos_server]]
-  # nodename = "node1"
-  # actor_name = "epaxos1"
+  [[placement.epaxos_server]]
+  nodename = "node1"
+  actor_name = "epaxos"
+  replicas = 5
   # replica_list = ["epaxos1"]
-  # replicas = 3
-  # replica_list = ["epaxos1", "epaxos2", "epaxos3"]
-
-  [[placement.epaxos_server]]
-  nodename = "node1"
-  actor_name = "epaxos1"
-  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
-
-  [[placement.epaxos_server]]
-  nodename = "node1"
-  actor_name = "epaxos2"
-  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
-
-  [[placement.epaxos_server]]
-  nodename = "node1"
-  actor_name = "epaxos3"
-  replica_list = ["epaxos1", "epaxos2", "epaxos3"]
+  replica_list = ["epaxos1", "epaxos2", "epaxos3", "epaxos4", "epaxos5"]
 
   # [[placement.ss]]
   # nodename = "node1"
@@ -53,5 +38,25 @@ port = 3000
 
   [[placement.writer]]
   nodename = "node1"
-  actor_name = "writer"
+  actor_name = "writer1"
   server = "epaxos1"
+
+  [[placement.writer]]
+  nodename = "node1"
+  actor_name = "writer2"
+  server = "epaxos2"
+
+  [[placement.writer]]
+  nodename = "node1"
+  actor_name = "writer3"
+  server = "epaxos3"
+
+  [[placement.writer]]
+  nodename = "node1"
+  actor_name = "writer4"
+  server = "epaxos4"
+
+  [[placement.writer]]
+  nodename = "node1"
+  actor_name = "writer5"
+  server = "epaxos5"

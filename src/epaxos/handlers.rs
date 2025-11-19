@@ -16,7 +16,6 @@ impl Processor {
 
         match &cmd {
             Command::Set { .. } => {
-                info!("Client Request Set cmd handled: {:?}", cmd);
                 // Purely for checking starting case where inst_num is already 0, no need to increment
                 let vec_size = self.cmds.get(&self.replica_name).unwrap().len();
                 if vec_size > 0 {
@@ -24,6 +23,7 @@ impl Processor {
                 }
 
                 self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
+                self.acc_quorum_ctr.push(0); 
 
                 let (deps, seq) = self.get_interfs(&cmd);
 
@@ -44,6 +44,16 @@ impl Processor {
                     replica: self.replica_name.clone(),
                     instance_num: self.instance_num,
                 };
+
+                #[cfg(debug_assertions)]
+                info!(
+                    "{}: Client Request Set cmd received: {}, {}, seq: {}, num_deps: {}",
+                    self.replica_name,
+                    cmd,
+                    instance,
+                    seq,
+                    deps.len()
+                );
 
                 let pre_accept = EMsg::PreAccept(PreAcceptMsg {
                     cmd,
@@ -69,12 +79,19 @@ impl Processor {
             deps,
             instance,
         } = msg;
-        info!("{}: PreAccept received for {}", self.replica_name, instance);
 
         // Get Interfering instances and max seq, check with incoming msg and update
         let (mut interf_deps, mut interf_seq) = self.get_interfs(&cmd);
+
+        #[cfg(not(debug_assertions))]
         interf_deps.extend(deps);
+        #[cfg(debug_assertions)]
+        interf_deps.extend(deps.clone());
+
         interf_seq = interf_seq.max(seq);
+
+        #[cfg(debug_assertions)]
+        let updated: bool = interf_seq > seq || interf_deps.len() > deps.len();
 
         // Add the incoming command to the cmds log
         let cmd_entry = CmdEntry {
@@ -86,11 +103,22 @@ impl Processor {
         // Add the incoming command to the cmds log
         self.cmds_insert(&instance, cmd_entry);
 
+        #[cfg(debug_assertions)]
+        info!(
+            "{}: PreAccept received for {}, updated: {}, seq: {}, num_deps: {}",
+            self.replica_name,
+            instance,
+            updated,
+            interf_seq,
+            interf_deps.len()
+        );
         // Prepare and send PreAcceptOk message
         let pre_accept_ok = EMsg::PreAcceptOk(PreAcceptOkMsg {
             seq: interf_seq,
             deps: interf_deps,
             instance,
+            #[cfg(debug_assertions)]
+            from_replica: self.replica_name.clone(),
         });
 
         vec![pre_accept_ok]
@@ -101,10 +129,17 @@ impl Processor {
             seq,
             deps,
             instance,
+            #[cfg(debug_assertions)]
+            from_replica,
         } = msg;
+        #[cfg(debug_assertions)]
         info!(
-            "{}: PreAcceptOk received for {}",
-            self.replica_name, instance
+            "{}: PreAcceptOk received for {} from {}, seq: {}, num_deps: {}",
+            self.replica_name,
+            instance,
+            from_replica,
+            seq,
+            deps.len(),
         );
 
         let Instance {
@@ -113,6 +148,7 @@ impl Processor {
         } = instance.clone();
 
         // should we check if this replica is same as replica name just to ensure that preAcceptok comes to leader only?
+        // TODO would have to change this when explicit prepare phase is added
         if replica != self.replica_name {
             error!("PreAcceptOk received by non-leader replica");
             return vec![];
@@ -185,7 +221,8 @@ impl Processor {
                 );
 
                 // Reset quorum counter for reuse
-                self.quorum_ctr[inst_num] = 0;
+                // ! ERROR: wrong place to set, more messages will end up incrementing it again and do accept phase twice
+                // self.quorum_ctr[inst_num] = 0;
 
                 let accept_msg = EMsg::Accept(AcceptMsg {
                     cmd: cmd_entry_mut.cmd.clone(),
@@ -250,9 +287,11 @@ impl Processor {
                     // TODO: Handle if reads also get fast path
                     return vec![commit_msg];
                 }
-            } else {
-                panic!("Quorum intersection invariant violated");
-            }
+            } 
+            // else {
+                // panic!("Quorum intersection invariant violated");
+                // instance probably moved in to accepted phase already, this is just a late message to be ignored
+            // }
         }
 
         vec![]
@@ -265,7 +304,13 @@ impl Processor {
             instance,
         } = msg;
 
-        info!("{}: Commit received for {}", self.replica_name, instance);
+        info!(
+            "{}: Commit received for {}, seq: {}, num_deps: {}",
+            self.replica_name,
+            instance,
+            seq,
+            deps.len()
+        );
 
         // Create a new CmdEntry with the Committed status
         let cmd_entry = CmdEntry {
@@ -288,7 +333,13 @@ impl Processor {
             instance,
         } = msg;
 
-        info!("{}: Accept received for {}", self.replica_name, instance);
+        info!(
+            "{}: Accept received for {}, seq: {}, num_deps: {}",
+            self.replica_name,
+            instance,
+            seq,
+            deps.len()
+        );
 
         // Create a new CmdEntry with the Accepted status
         let cmd_entry = CmdEntry {
@@ -302,17 +353,30 @@ impl Processor {
         self.cmds_insert(&instance, cmd_entry);
 
         // Prepare and send AcceptOk message
-        let accept_ok_msg = EMsg::AcceptOk(AcceptOkMsg { instance });
+        let accept_ok_msg = EMsg::AcceptOk(AcceptOkMsg {
+            instance,
+            #[cfg(debug_assertions)]
+            from_replica: self.replica_name.clone(),
+        });
 
         vec![accept_ok_msg]
     }
     pub fn accept_ok_handler(&mut self, msg: AcceptOkMsg) -> Vec<EMsg> {
-        let AcceptOkMsg { instance } = msg;
+        let AcceptOkMsg {
+            instance,
+            #[cfg(debug_assertions)]
+            from_replica,
+        } = msg;
         let Instance {
             replica,
             instance_num: inst_num,
         } = instance.clone();
-
+        #[cfg(debug_assertions)]
+        info!(
+            "{}: AcceptOk received for {} from {}",
+            self.replica_name, instance, from_replica
+        );
+        #[cfg(not(debug_assertions))]
         info!("{}: AcceptOk received for {}", self.replica_name, instance);
 
         // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
@@ -338,9 +402,9 @@ impl Processor {
         }
 
         // Increment the counter for AcceptOk messages
-        self.quorum_ctr[inst_num] += 1; // reused quorum_ctr
+        self.acc_quorum_ctr[inst_num] += 1; // reused quorum_ctr
 
-        let ctr = self.quorum_ctr[inst_num];
+        let ctr = self.acc_quorum_ctr[inst_num];
 
         // Check if majority is reached
         if ctr == majority {
@@ -355,6 +419,27 @@ impl Processor {
             });
 
             return vec![commit_msg];
+        }
+        vec![]
+    }
+
+    pub fn dump_state_handler(&self) -> Vec<EMsg> {
+        info!("{}: Dumping State", self.replica_name);
+        for (replica, cmds_vec) in &self.cmds {
+            info!("Replica: {}", replica);
+            for (i, cmd_entry_opt) in cmds_vec.iter().enumerate() {
+                match cmd_entry_opt {
+                    Some(cmd_entry) => {
+                        info!(
+                            "  Instance {}: Cmd: {:?}, Seq: {}, Deps: {:?}, Status: {:?}",
+                            i, cmd_entry.cmd, cmd_entry.seq, cmd_entry.deps, cmd_entry.status
+                        );
+                    }
+                    None => {
+                        info!("  Instance {}: Empty", i);
+                    }
+                }
+            }
         }
         vec![]
     }

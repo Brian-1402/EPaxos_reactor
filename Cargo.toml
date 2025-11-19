@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = [ "verbose" ]
 verbose = [ ]
+invariants = [ ]
 
 [dependencies]
 bincode = "2.0.1"

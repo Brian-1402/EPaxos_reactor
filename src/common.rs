@@ -98,6 +98,8 @@ pub struct PreAcceptOkMsg {
     pub seq: u64,
     pub deps: HashSet<Instance>,
     pub instance: Instance,
+    #[cfg(debug_assertions)]
+    pub from_replica: String,
 }
 
 #[derive(Encode, Decode, Debug, Clone)]
@@ -120,6 +122,8 @@ pub struct AcceptMsg {
 pub struct AcceptOkMsg {
     // pub cmd: Command,
     pub instance: Instance,
+    #[cfg(debug_assertions)]
+    pub from_replica: String,
 }
 
 #[derive(Encode, Decode, Debug, Clone, DefaultPrio, DeriveMsg)]
@@ -131,4 +135,5 @@ pub enum EMsg {
     Commit(CommitMsg),
     Accept(AcceptMsg),
     AcceptOk(AcceptOkMsg),
+    DumpStateMsg,
 }

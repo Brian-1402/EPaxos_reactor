@@ -6,11 +6,19 @@ use std::collections::HashSet;
 // use tracing::{error};
 
 impl Processor {
+    /// Calculate the majority size based on the number of replicas. Excludes self.
+    /// Simple invariants:
+    /// Must be >= 1
+    /// majority + 1 should have intersection with another majority. Hence 2*(majority+1)
     pub fn get_majority(&self) -> u32 {
         let res = (self.replica_list.len() / 2) as u32;
         if res < 1 { 1 } else { res }
     }
 
+    /// Calculate the fast quorum size based on the number of replicas. Excludes self.
+    /// Simple invariants:
+    /// Must be >= majority
+    /// Must be >= 1
     pub fn fast_quorum(&self) -> u32 {
         let res = (self.replica_list.len() as i32) - 2;
         if res < 1 { 1 } else { res as u32 }
@@ -24,18 +32,21 @@ impl Processor {
         }
     }
 
+    /// Insert a CmdEntry into cmds at the position specified by instance
+    /// Overwrites if the position is empty or has the same command
+    /// Panics if the position is already occupied with a different command
     pub fn cmds_insert(&mut self, instance: &Instance, cmd_entry: CmdEntry) {
         let index = instance.instance_num;
         let required_size = index + 1;
 
         self.resize_cmds(required_size, &instance.replica);
 
-        let cmds_for_replica = self
+        let cmds_vec = self
             .cmds
             .get_mut(&instance.replica)
             .expect("Internal error: Replica vector should exist after initialization.");
 
-        let position = cmds_for_replica
+        let position = cmds_vec
             .get_mut(index)
             .expect("Index should be valid after resize_cmds was called.");
 
@@ -47,19 +58,35 @@ impl Processor {
                 // check if the existing command is same as cmd_entry
                 if existing.cmd == cmd_entry.cmd {
                     // replace existing entry in case other fields (seq, deps, status) have changed
+                    // do checks, that the seq and deps of the new entry are >= existing
+                    // if cfg!(debug_assertions) {
+                    //     if cmd_entry.seq < existing.seq {
+                    //         panic!(
+                    //             "{}: {} slot - trying to insert cmd lesser seq: existing seq: {:?}, new seq: {:?}",
+                    //             self.replica_name, instance, existing.seq, cmd_entry.seq
+                    //         );
+                    //     }
+                    //     if !existing.deps.is_subset(&cmd_entry.deps) {
+                    //         panic!(
+                    //             "{}: {} slot - trying to insert cmd with missing dep: existing dep: {:?}, new deps: {:?}",
+                    //             self.replica_name, instance, existing.deps, cmd_entry.deps
+                    //         );
+                    //     }
+                    // }
                     *position = Some(cmd_entry);
-                } else {
+                } else if cfg!(debug_assertions) {
                     panic!(
-                        "Slot occupied with different cmd: existing: {}:{:?}, new: {}:{:?}",
-                        self.replica_name, existing.cmd, instance.replica, cmd_entry.cmd
+                        "{}: {} slot - occupied with different cmd: existing: {:?}, new: {:?}",
+                        self.replica_name, instance, existing.cmd, cmd_entry.cmd
                     );
                 }
             }
         }
     }
-    // used to get deps of a given cmd entry
-    // iterates through all CmdInstance present in cmds for all replicas, and if key is same,
-    // add it to cmd_entry deps
+
+    /// Used to get deps of a given cmd entry
+    /// Iterates through all CmdInstance present in cmds for all replicas, and if key is same,
+    /// add it to cmd_entry deps
     pub fn get_interfs(&self, cmd: &Command) -> (HashSet<Instance>, u64) {
         let mut deps = HashSet::new();
         let mut max_seq = 0;
@@ -88,7 +115,7 @@ impl Processor {
 mod tests {
     use super::*;
     use crate::common::{Command, Variable};
-    use crate::epaxos::{CmdEntry, CmdStatus}; // Ensure CmdStatus is visible
+    use crate::epaxos::{CmdEntry, CmdStatus};
 
     // --- Helpers ---
 
@@ -109,6 +136,32 @@ mod tests {
     }
 
     // --- Tests ---
+    #[test]
+    fn test_quorum_calculations() {
+        let cases = vec![
+            // (peers, expected_majority, expected_fast_quorum)
+            (1, 1, 1), // Edge case: 1 node
+            (3, 1, 1), // 3 nodes: maj=1, fq=1
+            (5, 2, 3), // 5 nodes: maj=2, fq=3
+            (7, 3, 5), // 7 nodes: maj=3, fq=5
+        ];
+
+        for (peers, exp_maj, exp_fq) in cases {
+            let p = mock_processor(peers);
+            assert_eq!(
+                p.get_majority(),
+                exp_maj,
+                "Majority mismatch for peers={}",
+                peers
+            );
+            assert_eq!(
+                p.fast_quorum(),
+                exp_fq,
+                "Fast Quorum mismatch for peers={}",
+                peers
+            );
+        }
+    }
 
     #[test]
     fn test_resize_cmds() {
@@ -127,8 +180,8 @@ mod tests {
         assert_eq!(vec.len(), 5);
         assert!(vec[4].is_none());
 
-        // Action: Resize smaller (should be ignored/no-op for Vec::resize_with if len > new_len?)
-        // Actually helpers.rs logic checks: if new_size > current_size.
+        // Action: Resize smaller (should be ignored by implementation logic)
+        // helpers.rs logic checks: if new_size > current_size.
         // If new_size < current_size, it does nothing.
         p.resize_cmds(2, &target_replica);
         assert_eq!(p.cmds.get(&target_replica).unwrap().len(), 5);
@@ -161,7 +214,116 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Slot occupied")]
+    fn test_cmds_insert_update_existing() {
+        let mut p = mock_processor(3);
+        let inst = Instance {
+            replica: "r1".into(),
+            instance_num: 1,
+        };
+
+        // 1. Initial insert
+        let cmd = mock_cmd("key1");
+        let mut entry = CmdEntry {
+            cmd: cmd.clone(),
+            seq: 10,
+            deps: HashSet::from([Instance {
+                replica: "r2".into(),
+                instance_num: 0,
+            }]),
+            status: CmdStatus::PreAccepted,
+        };
+        p.cmds_insert(&inst, entry.clone());
+
+        // 2. Valid Update: Higher Seq, Superset Deps, Status Change
+        entry.seq = 20;
+        entry.deps.insert(Instance {
+            replica: "r3".into(),
+            instance_num: 0,
+        });
+        entry.status = CmdStatus::Accepted;
+
+        p.cmds_insert(&inst, entry);
+
+        // 3. Verify Update Persisted
+        let stored = p.cmds.get("r1").unwrap()[1].as_ref().unwrap();
+        assert_eq!(stored.seq, 20);
+        assert_eq!(stored.deps.len(), 2);
+        assert!(matches!(stored.status, CmdStatus::Accepted));
+    }
+
+    #[test]
+    #[should_panic(expected = "lesser seq: existing seq")]
+    fn test_cmds_insert_panic_lower_seq() {
+        let mut p = mock_processor(3);
+        let inst = Instance {
+            replica: "r1".into(),
+            instance_num: 0,
+        };
+        let cmd = mock_cmd("key1");
+
+        // High Seq first
+        p.cmds_insert(
+            &inst,
+            CmdEntry {
+                cmd: cmd.clone(),
+                seq: 20,
+                deps: HashSet::new(),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+
+        // Attempt Low Seq update
+        p.cmds_insert(
+            &inst,
+            CmdEntry {
+                cmd,
+                seq: 10,
+                deps: HashSet::new(),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "missing dep: existing dep")]
+    fn test_cmds_insert_panic_missing_deps() {
+        let mut p = mock_processor(3);
+        let inst = Instance {
+            replica: "r1".into(),
+            instance_num: 0,
+        };
+        let cmd = mock_cmd("key1");
+        let dep_inst = Instance {
+            replica: "r2".into(),
+            instance_num: 5,
+        };
+
+        // Insert with dependencies
+        p.cmds_insert(
+            &inst,
+            CmdEntry {
+                cmd: cmd.clone(),
+                seq: 10,
+                deps: HashSet::from([dep_inst]),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+
+        // Attempt update with empty dependencies (subset violation)
+        p.cmds_insert(
+            &inst,
+            CmdEntry {
+                cmd,
+                seq: 10,
+                deps: HashSet::new(),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+    }
+
+    #[test]
+    // Updated expectation to match the actual panic message format: "{}: {} slot - occupied..."
+    #[should_panic(expected = "slot - occupied")]
     fn test_cmds_insert_panic_on_occupied() {
         let mut p = mock_processor(3);
         let inst = Instance {
@@ -179,7 +341,7 @@ mod tests {
         // Fill the slot
         p.cmds_insert(&inst, entry1);
 
-        // Try filling again
+        // Try filling again with a different command (triggers panic in debug mode)
         let entry2 = CmdEntry {
             cmd: mock_cmd("key2"),
             seq: 2,
@@ -233,5 +395,44 @@ mod tests {
 
         assert!(deps_c.is_empty());
         assert_eq!(seq_c, 1, "Default seq should be 0 + 1");
+    }
+    #[test]
+    fn test_get_interfs_max_seq_aggregation() {
+        let mut p = mock_processor(3);
+
+        // Insert conflict 1 (Seq 100)
+        p.cmds_insert(
+            &Instance {
+                replica: "r1".into(),
+                instance_num: 0,
+            },
+            CmdEntry {
+                cmd: mock_cmd("A"),
+                seq: 100,
+                deps: HashSet::new(),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+
+        // Insert conflict 2 (Seq 200)
+        p.cmds_insert(
+            &Instance {
+                replica: "r2".into(),
+                instance_num: 0,
+            },
+            CmdEntry {
+                cmd: mock_cmd("A"),
+                seq: 200,
+                deps: HashSet::new(),
+                status: CmdStatus::PreAccepted,
+            },
+        );
+
+        // Check interference
+        let (_, seq) = p.get_interfs(&mock_cmd("A"));
+        assert_eq!(
+            seq, 201,
+            "Should define seq based on the maximum conflicting seq (200)"
+        );
     }
 }

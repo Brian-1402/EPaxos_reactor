@@ -22,7 +22,7 @@ impl Iterator for WriteReqGenerator {
     type Item = EMsg;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.count < 10 {
+        if self.count < 1 {
             std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
             self.count += 1;
 
@@ -38,6 +38,10 @@ impl Iterator for WriteReqGenerator {
                 msg_id: format!("{}_r_{}", self.addr, self.count),
                 cmd,
             }))
+        // } else if self.count == 1 {
+        //     //send EMsg::DumpStateMsg
+        //     self.count += 1;
+        //     Some(EMsg::DumpStateMsg)
         } else {
             None
         }
@@ -59,16 +63,6 @@ impl reactor_actor::ActorProcess for Processor {
 
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
-            // EMsg::WriteRequest(_msg) => {
-            //     #[cfg(feature = "verbose")]
-            //     {
-            //         info!(
-            //             "{} Writing: key={} val={}",
-            //             self.writer_client, _msg.key, _msg.val
-            //         );
-            //     }
-            //     vec![input]
-            // } // forward to server
             EMsg::ClientRequest(_msg) => {
                 #[cfg(feature = "verbose")]
                 if let Command::Set { key, val } = &_msg.cmd {
@@ -90,6 +84,13 @@ impl reactor_actor::ActorProcess for Processor {
                 }
                 vec![]
             } // _ => panic!("Writer got unexpected message"),
+            EMsg::DumpStateMsg => {
+                #[cfg(feature = "verbose")]
+                {
+                    info!("{} Sending DumpStateMsg", self.writer_client);
+                }
+                vec![input]
+            }
             _ => {
                 panic!("Writer got unexpected message")
             }
@@ -110,7 +111,7 @@ impl reactor_actor::ActorSend for Sender {
 
     async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
         match &output {
-            EMsg::ClientRequest(_) => RouteTo::from(self.server.as_str()),
+            EMsg::ClientRequest(_) | EMsg::DumpStateMsg => RouteTo::from(self.server.as_str()),
             _ => panic!("Writer tried to send non WriteRequest"),
         }
     }

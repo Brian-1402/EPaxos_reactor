@@ -10,12 +10,14 @@ mod helpers;
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Processor
 // //////////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone)]
 enum CmdStatus {
     PreAccepted,
     Accepted,
     Committed,
 }
 
+#[derive(Debug, Clone)]
 struct CmdEntry {
     cmd: Command,
 
@@ -27,12 +29,13 @@ struct CmdEntry {
     status: CmdStatus,
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 struct CmdMetadata {
     client_id: String,
     msg_id: String,
 }
 
+#[derive(Debug, Clone)]
 struct Processor {
     #[allow(dead_code)]
     data: HashMap<Variable, String>,
@@ -42,6 +45,7 @@ struct Processor {
     // instance_num: u64,
     instance_num: usize,
     quorum_ctr: Vec<u32>, // Counter for PreAcceptOk messages, // Indexed by instance number
+    acc_quorum_ctr: Vec<u32>, // Counter for AcceptOk messages, // Indexed by instance number
     #[allow(dead_code)]
     app_meta: Vec<CmdMetadata>, // Indexed by instance number
 
@@ -62,6 +66,7 @@ impl reactor_actor::ActorProcess for Processor {
             EMsg::Commit(msg) => self.commit_handler(msg),
             EMsg::Accept(msg) => self.accept_handler(msg),
             EMsg::AcceptOk(msg) => self.accept_ok_handler(msg),
+            EMsg::DumpStateMsg => self.dump_state_handler(),
             _ => {
                 panic!("Server got an unexpected message")
             }
@@ -81,6 +86,7 @@ impl Processor {
             cmds,
             instance_num: 0,
             quorum_ctr: vec![],
+            acc_quorum_ctr: vec![],
             app_meta: vec![],
             replica_list,
             replica_name,
@@ -92,19 +98,15 @@ struct Sender {
     replica_name: String,
     replica_list: Vec<String>,
 }
-
-impl reactor_actor::ActorSend for Sender {
-    type OMsg = EMsg;
-
-    async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
-        match &output {
+impl Sender {
+    /// Computes the explicit string destinations for a given message.
+    /// Panics if the message type relies on context (Reply) or is invalid.
+    fn resolve_destinations(&self, output: &EMsg) -> Vec<String> {
+        match output {
             EMsg::ClientResponse(response) => {
-                // Use client_id to route the message to the correct client
-                let client_id = &response.client_id; // Assuming msg_id contains client_id
-                RouteTo::Single(std::borrow::Cow::Owned(client_id.clone()))
+                vec![response.client_id.clone()]
             }
             EMsg::PreAccept(_) | EMsg::Accept(_) | EMsg::Commit(_) => {
-                // Broadcast PreAccept to all replicas except itself
                 let mut dests: Vec<String> = self
                     .replica_list
                     .iter()
@@ -113,15 +115,32 @@ impl reactor_actor::ActorSend for Sender {
                     .collect();
 
                 if dests.is_empty() {
-                    // send to myself. add myself into dests
                     dests.push(self.replica_name.clone());
                 }
-                // info!("Broadcasting message to : {:?}", dests);
-                RouteTo::Multiple(std::borrow::Cow::Owned(dests))
+                dests
             }
+            _ => panic!("Message type requires contextual routing or is invalid"),
+        }
+    }
+}
+
+impl reactor_actor::ActorSend for Sender {
+    type OMsg = EMsg;
+
+    async fn before_send<'a>(&'a mut self, output: &Self::OMsg) -> RouteTo<'a> {
+        match output {
+            // Handle contextual replies immediately
             EMsg::PreAcceptOk(_) | EMsg::AcceptOk(_) => RouteTo::Reply,
+            // Handle explicit destinations via helper
             _ => {
-                panic!("Server tried to send non ClientResponse")
+                let dests = self.resolve_destinations(output);
+
+                // Optimize routing type based on vector length
+                if dests.len() == 1 {
+                    RouteTo::Single(std::borrow::Cow::Owned(dests[0].clone()))
+                } else {
+                    RouteTo::Multiple(std::borrow::Cow::Owned(dests))
+                }
             }
         }
     }
