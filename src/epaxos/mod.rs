@@ -878,7 +878,7 @@ impl Processor {
             app_meta: vec![],
             replica_list,
             replica_name,
-            pending_reads: HashSet::new(), // check TODO
+            pending_reads: HashSet::new(),
         }
     }
 }
