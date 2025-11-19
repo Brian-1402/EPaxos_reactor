@@ -23,7 +23,12 @@ impl Iterator for ReadReqGenerator {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.count == 0 {
-            std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
+            // Initial delay before first read
+            std::thread::sleep(Duration::from_millis(SLEEP_MS));
+        }
+        if self.count < 10 {
+            // std::thread::sleep(Duration::from_millis(2 * SLEEP_MS));
+            // std::thread::sleep(Duration::from_millis(100));
             self.count += 1;
             let cmd = Command::Get {
                 key: Variable {

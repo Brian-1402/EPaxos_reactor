@@ -15,6 +15,7 @@ enum CmdStatus {
     PreAccepted,
     Accepted,
     Committed,
+    Executed,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +51,8 @@ struct Processor {
     app_meta: Vec<CmdMetadata>, // Indexed by instance number
 
     replica_list: Vec<String>,
-    replica_name: String, // Myself
+    replica_name: String,             // Myself
+    pending_reads: HashSet<Instance>, // pending list of outstanding reads
 }
 
 impl reactor_actor::ActorProcess for Processor {
@@ -90,6 +92,7 @@ impl Processor {
             app_meta: vec![],
             replica_list,
             replica_name,
+            pending_reads: HashSet::new(),
         }
     }
 }

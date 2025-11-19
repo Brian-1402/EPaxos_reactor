@@ -44,6 +44,7 @@ node: kill_node install_node build
 	
 node_debug: kill_node install_node build_debug
 	reactor_nctrl --port 3000 target/debug | grep --line-buffered "epaxos::"
+# 	reactor_nctrl --port 3000 target/debug
 
 node_log:
 	@mkdir -p logs

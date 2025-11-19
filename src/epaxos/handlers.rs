@@ -14,62 +14,53 @@ impl Processor {
             client_id,
         } = msg;
 
-        match &cmd {
-            Command::Set { .. } => {
-                // Purely for checking starting case where inst_num is already 0, no need to increment
-                let vec_size = self.cmds.get(&self.replica_name).unwrap().len();
-                if vec_size > 0 {
-                    self.instance_num += 1;
-                }
-
-                self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
-                self.acc_quorum_ctr.push(0); 
-
-                let (deps, seq) = self.get_interfs(&cmd);
-
-                let cmd_entry = CmdEntry {
-                    cmd: cmd.clone(),
-                    seq,
-                    deps: deps.clone(),
-                    status: CmdStatus::PreAccepted,
-                };
-
-                let cmds_vec = self.cmds.get_mut(&self.replica_name).unwrap();
-                cmds_vec.push(Some(cmd_entry));
-
-                // Store client metadata in app_meta
-                self.app_meta.push(CmdMetadata { client_id, msg_id });
-
-                let instance = Instance {
-                    replica: self.replica_name.clone(),
-                    instance_num: self.instance_num,
-                };
-
-                #[cfg(debug_assertions)]
-                info!(
-                    "{}: Client Request Set cmd received: {}, {}, seq: {}, num_deps: {}",
-                    self.replica_name,
-                    cmd,
-                    instance,
-                    seq,
-                    deps.len()
-                );
-
-                let pre_accept = EMsg::PreAccept(PreAcceptMsg {
-                    cmd,
-                    seq,
-                    deps,
-                    instance,
-                });
-
-                vec![pre_accept]
-            }
-
-            Command::Get { .. } => {
-                // Handle Read Request (to be implemented later)
-                vec![]
-            }
+        // Purely for checking starting case where inst_num is already 0, no need to increment
+        let vec_size = self.cmds.get(&self.replica_name).unwrap().len();
+        if vec_size > 0 {
+            self.instance_num += 1;
         }
+
+        self.quorum_ctr.push(0); // push 0 to quorum_ctr list to not resize later
+        self.acc_quorum_ctr.push(0);
+
+        let (deps, seq) = self.get_interfs(&cmd);
+
+        let cmd_entry = CmdEntry {
+            cmd: cmd.clone(),
+            seq,
+            deps: deps.clone(),
+            status: CmdStatus::PreAccepted,
+        };
+
+        let cmds_vec = self.cmds.get_mut(&self.replica_name).unwrap();
+        cmds_vec.push(Some(cmd_entry));
+
+        // Store client metadata in app_meta
+        self.app_meta.push(CmdMetadata { client_id, msg_id });
+
+        let instance = Instance {
+            replica: self.replica_name.clone(),
+            instance_num: self.instance_num,
+        };
+
+        #[cfg(debug_assertions)]
+        info!(
+            "{}: Client Request Set cmd received: {}, {}, seq: {}, num_deps: {}",
+            self.replica_name,
+            cmd,
+            instance,
+            seq,
+            deps.len()
+        );
+
+        let pre_accept = EMsg::PreAccept(PreAcceptMsg {
+            cmd,
+            seq,
+            deps,
+            instance,
+        });
+
+        vec![pre_accept]
     }
 
     pub fn pre_accept_handler(&mut self, msg: PreAcceptMsg) -> Vec<EMsg> {
@@ -174,9 +165,12 @@ impl Processor {
             .expect("Command not found in log");
 
         // Check if already committed
-        if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
+        if matches!(
+            cmd_entry_mut.status,
+            CmdStatus::Committed | CmdStatus::Executed
+        ) {
             info!(
-                "{}: PreAcceptOk received for already committed command. Ignoring",
+                "{}: PreAcceptOk received for already committed or executed command. Ignoring",
                 self.replica_name
             );
             return vec![]; // Ignore the message 
@@ -244,26 +238,26 @@ impl Processor {
         }
 
         // Check if fast quorum is reached
-        if ctr == fast_quorum {
-            if matches!(cmd_entry_mut.status, CmdStatus::PreAccepted) {
-                // status is PreAccpeted
-                // Commit phase
-                // changing msg status to committed
-                cmd_entry_mut.status = CmdStatus::Committed;
-                info!(
-                    "{}: Fast Commit started for {}",
-                    self.replica_name, instance
-                );
+        if ctr == fast_quorum && matches!(cmd_entry_mut.status, CmdStatus::PreAccepted) {
+            // status is PreAccpeted
+            // Commit phase
+            // changing msg status to committed
+            cmd_entry_mut.status = CmdStatus::Committed;
+            info!(
+                "{}: Fast Commit started for {}",
+                self.replica_name, instance
+            );
 
-                let commit_msg = EMsg::Commit(CommitMsg {
-                    cmd: cmd_entry_mut.cmd.clone(),
-                    seq: cmd_entry_mut.seq,
-                    deps: cmd_entry_mut.deps.clone(),
-                    instance: instance.clone(),
-                });
+            let commit_msg = EMsg::Commit(CommitMsg {
+                cmd: cmd_entry_mut.cmd.clone(),
+                seq: cmd_entry_mut.seq,
+                deps: cmd_entry_mut.deps.clone(),
+                instance: instance.clone(),
+            });
 
-                // Only for write commands (Set)
-                if matches!(cmd_entry_mut.cmd, Command::Set { .. }) {
+            // Only for write commands (Set)
+            match &cmd_entry_mut.cmd {
+                Command::Set { .. } => {
                     let CmdMetadata { msg_id, client_id } = &self.app_meta[inst_num];
 
                     let client_response = EMsg::ClientResponse(ClientResponse {
@@ -279,20 +273,40 @@ impl Processor {
                         self.replica_name, instance
                     );
 
-                    return vec![
-                        commit_msg,
-                        client_response, // send to correct client
-                    ];
-                } else {
-                    // TODO: Handle if reads also get fast path
-                    return vec![commit_msg];
+                    let mut out_msgs = self.handle_pending_reads(&instance);
+
+                    let mut final_msgs = vec![commit_msg, client_response];
+                    final_msgs.append(&mut out_msgs);
+                    return final_msgs;
+                    // return vec![
+                    //     commit_msg,
+                    //     client_response, // send to correct client
+                    // ];
                 }
-            } 
-            // else {
-                // panic!("Quorum intersection invariant violated");
-                // instance probably moved in to accepted phase already, this is just a late message to be ignored
-            // }
+                Command::Get { .. } => {
+                    // TODO: Handle if reads also get fast path
+                    // return vec![commit_msg];
+                    let mut out_msgs = vec![commit_msg];
+                    if self.deps_all_ready(&instance) {
+                        let mut exec_out = self.execute_cmd(&instance);
+                        out_msgs.append(&mut exec_out);
+
+                        #[cfg(debug_assertions)]
+                        info!(
+                            "{}: Executed fast committed read {}",
+                            self.replica_name, instance
+                        );
+                    } else {
+                        self.pending_reads.insert(instance.clone());
+                    }
+                    return out_msgs;
+                }
+            }
         }
+        // else {
+        // panic!("Quorum intersection invariant violated");
+        // instance probably moved in to accepted phase already, this is just a late message to be ignored
+        // }
 
         vec![]
     }
@@ -311,6 +325,7 @@ impl Processor {
             seq,
             deps.len()
         );
+        let is_set_req: bool = matches!(&cmd, Command::Set { .. });
 
         // Create a new CmdEntry with the Committed status
         let cmd_entry = CmdEntry {
@@ -322,6 +337,14 @@ impl Processor {
 
         // Insert the CmdEntry into the cmds array
         self.cmds_insert(&instance, cmd_entry);
+
+        if is_set_req {
+            let mut out_msgs = self.handle_pending_reads(&instance);
+
+            let mut final_msgs = vec![];
+            final_msgs.append(&mut out_msgs);
+            return final_msgs;
+        }
 
         vec![]
     }
@@ -415,10 +438,50 @@ impl Processor {
                 cmd: cmd_entry_mut.cmd.clone(),
                 seq: cmd_entry_mut.seq,
                 deps: cmd_entry_mut.deps.clone(),
-                instance,
+                instance: instance.clone(),
             });
 
-            return vec![commit_msg];
+            match &cmd_entry_mut.cmd {
+                Command::Set { .. } => {
+                    let CmdMetadata { msg_id, client_id } = &self.app_meta[inst_num];
+
+                    let client_response = EMsg::ClientResponse(ClientResponse {
+                        msg_id: msg_id.clone(),
+                        client_id: client_id.clone(),
+                        cmd_result: CommandResult::Set {
+                            key: cmd_entry_mut.cmd.key().clone(),
+                            status: true,
+                        },
+                    });
+                    info!(
+                        "{}: Sending Client Response for {}",
+                        self.replica_name, instance
+                    );
+
+                    let mut out_msgs = self.handle_pending_reads(&instance);
+
+                    let mut final_msgs = vec![commit_msg, client_response];
+                    final_msgs.append(&mut out_msgs);
+                    return final_msgs;
+                    // return vec![
+                    //     commit_msg,
+                    //     client_response, // send to correct client
+                    // ];
+                }
+                Command::Get { .. } => {
+                    // TODO: Handle if reads also get fast path
+                    // return vec![commit_msg];
+                    let mut out_msgs = vec![commit_msg];
+                    if self.deps_all_ready(&instance) {
+                        let mut exec_out = self.execute_cmd(&instance);
+                        out_msgs.append(&mut exec_out);
+                    } else {
+                        self.pending_reads.insert(instance);
+                    }
+                    return out_msgs;
+                }
+            }
+            // return vec![commit_msg];
         }
         vec![]
     }

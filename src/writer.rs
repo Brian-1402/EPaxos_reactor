@@ -22,8 +22,9 @@ impl Iterator for WriteReqGenerator {
     type Item = EMsg;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.count < 1 {
-            std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
+        if self.count < 10 {
+            std::thread::sleep(Duration::from_millis(SLEEP_MS));
+            // std::thread::sleep(Duration::from_millis(100));
             self.count += 1;
 
             let cmd = Command::Set {
@@ -31,7 +32,7 @@ impl Iterator for WriteReqGenerator {
                     name: "key1".to_string(),
                 },
                 // key: Variable(format!("foo{}", self.count)),
-                val: format!("value{}", self.count),
+                val: format!("value{}{}", self.addr, self.count),
             };
             Some(EMsg::ClientRequest(ClientRequest {
                 client_id: self.addr.clone(),
