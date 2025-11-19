@@ -291,7 +291,87 @@ Template: For each message:
 ##### Invariants:
   - ??
 
+### Read Request Handling
+<!-- - First wait until the cmd is committed
+- Form the dependency graph according to algo specified in paper 
+  - Build cmd’s dependency graph by adding cmd and all commands in instances from cmd’s dependency list as nodes, with directed edges from cmd to these nodes, repeating this process recursively for all of cmd’s dependencies(starting with step 1)
+- Find the strongly connected components and topologically sort them
+- In inverse topological order, for each strongly connected component
+  - Sort commands on the basis of seq number and 
+  - Execute every un-executed command in increasingsequence number order, marking them executed.
+- So wen a read command is getting committed check its dependency list n call execute command function
+- This execute function shud build graph for that cmd n do all the above for u 
+- n for cmds in the dependency list that are committed n not waiting on anyone it executes
+- Once it sees a cmd that isnt committed then it returns
+- Now whenever a cmd goes to commit phase inside AcceptOk or PreAcceptOk msg handling
+  - It has to check if a read cmd was waiting on this current cmd
+  - If yes then we have to call execute cmd on this current cmd
+  - If not do nothing
+- So once a cmd is executed we need to remove it from the dependency list of all read cmds that were waiting on it
+- And at that instance num index we put None object in the cmds log
+- One optimization we can do here add a cmd status called Executed so that we dont have to take care
+  of removing the cmd from any list we can just do a simple check
+- So whenever we execute a cmd we need to check if there was a pending read cmd waiting on this cmd and that after its execution all the cmds in the dependency list have status as executed we can send a client response
+- So now one thing is we cant again n again do the starting steps which are form the graph, then find the scc's n further so we need to check wt to do here
+- To keep it simple when a cmd goes to commit phase find list of pending reads on this list if the list is non empty then run execute cmd on this 
+- So if we do this for every cmd, after the execution happens; the execution stops midway if a a depedent cmd hasnt committed thats fine; but if the cmd status is changed to executed then we check the pending reads list again and for all reads whose all cmds in the dependency list is marked executed we return a client response.
+- I am not sure how to store dependency graph bcz calculating it everytime is complex -->
 
+
+- `execute_cmd` Function:
+  - First wait until the cmd is committed
+  - Form the dependency graph according to algo specified in paper 
+    - Build cmd’s dependency graph by adding cmd and all commands in instances from cmd’s dependency list as nodes, with directed edges from cmd to these nodes, repeating this process recursively for all of cmd’s dependencies(starting with step 1)
+  - Find the strongly connected components and topologically sort them
+  - In inverse topological order, for each strongly connected component
+    - Sort commands on the basis of seq number and 
+    - Execute every un-executed command in increasing sequence number order, marking them executed.
+  - Note this execute cmd can again execute two types of cmds:read and write 
+  - For read it has to send read client response and remove the read from pending_reads list
+  - For write it just has to set the value to the key in the data hashmap
+  - Once executed in the cmds log at that instance remove the entry n put None
+
+- `execute_as_much_as_u_can` Function:
+  - First wait until the cmd is committed
+  - Here it is possible that some dependencies might not be found in the cmds log only we just have the instances but no entry exists in cmd[R][i] 
+  - Form the dependency graph according to algo specified in paper 
+    - Build cmd’s dependency graph by adding cmd and all commands in instances from cmd’s dependency list as nodes, with directed edges from cmd to these nodes, repeating this process recursively for all of cmd’s dependencies(starting with step 1)
+  - Find the strongly connected components and topologically sort them
+  - In inverse topological order, for each strongly connected component
+    - Sort commands on the basis of seq number and 
+    - Here until u find the first non committed msg:
+      - U can execute the commands 
+    - Once u get the first non committed msg or msg that doesnt have an entry in cmds log -> drop n return
+  - Note this execute cmd can again execute two types of cmds:read and write 
+  - For read it has to send read client response and remove the read from pending_reads list
+  - For write it just has to set the value to the key in the data hashmap
+
+
+- We need to add a list pending_reads in Processor struct to keep tracks of reads that havent been answered yet
+- Pending reads would be a list of instances
+- Now if a read command goes to commit phase in PreAcceptOk or AcceptOk then add that read cmd to pending_reads list
+- Now if a write command goes to commit phase in PreAcceptOk or AcceptOk then:
+  - First find pending reads that are waiting on this write_cmd
+  - If this list is empty then dont do anything (just commit n leave)
+  - If list isnt empty then there are reads that depends on this write so it has to be committed n executed:
+    - Get the depedency list of the write_cmd
+    - If this dependency list is empty then:
+      - Commit n execute the cmd
+    - Else:
+      - Check the status of all cmds in dependency list of write_cmd
+        - If all statuses are committed or executed:
+          - Commit the msg n then call execute_command function above
+          - This will execute the cmd
+          - Now check pending reads
+            - For each read_cmd that is not executed:
+              - Check the status of all cmds in dependency list of the read_cmd
+                - If all status is either committed or executed then call execute_cmd on this read
+                - Else return 
+        - Else if some statuses are non committed:
+          - Commit the msg n then call execute_as_much_as_u_can function above
+
+
+<!-- Pending reads cant be a hashmap because because in that case management becomes difficult -->
 
 ## Paper variables
 
