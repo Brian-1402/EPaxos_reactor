@@ -6,6 +6,14 @@
 - `make job`: (after make node) Runs job controller to load the epaxos library, connect to node and starts epaxos
 - `make pre_commit`: Runs all the CI/CD checks (formatting, linting, etc)
 
+# Graphs generation
+- Edit `epaxos.toml` to set client workload parameters like `target_rps`
+- Run `make node_log LOG="logfile_{rps}rps.log"` here fill rps with whatever integer rps value you set in toml.
+  - This will make the logs in logs/ dir
+- Repeat the above for different rps values
+- Run `python3 analyze_results.py`. Requires matplotlib.
+
+
 ## CI/CD check commands
 ```bash
 # Check formatting issues
@@ -24,8 +32,6 @@ cargo fmt --all
 cargo clippy --fix --allow-dirty --allow-staged -- -A warnings
 ```
 
-## Current project status
-- For now just made a single server responding to reads
 
 # System design
 

@@ -169,6 +169,7 @@ impl Processor {
             cmd_entry_mut.status,
             CmdStatus::Committed | CmdStatus::Executed
         ) {
+            #[cfg(debug_assertions)]
             info!(
                 "{}: PreAcceptOk received for already committed or executed command. Ignoring",
                 self.replica_name
@@ -181,6 +182,7 @@ impl Processor {
         if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
             // Ensure quorum counter is less than majority
             if self.quorum_ctr[inst_num] >= majority {
+                #[cfg(debug_assertions)]
                 info!(
                     "{}: PreAcceptOk received for already accepted command with sufficient quorum. Ignoring",
                     self.replica_name
@@ -209,6 +211,7 @@ impl Processor {
                 // check if status is Accepted
                 // Phase 2: Paxos-Accept
 
+                #[cfg(debug_assertions)]
                 info!(
                     "{}: Paxos Accept Started for {}",
                     self.replica_name, instance
@@ -227,6 +230,7 @@ impl Processor {
                 return vec![accept_msg];
             } else {
                 // Wait for fast quorum
+                #[cfg(debug_assertions)]
                 info!(
                     "{}: Majority reached without conflicts for {}, waiting for Fast Quorum",
                     self.replica_name, instance
@@ -243,6 +247,7 @@ impl Processor {
             // Commit phase
             // changing msg status to committed
             cmd_entry_mut.status = CmdStatus::Committed;
+            #[cfg(debug_assertions)]
             info!(
                 "{}: Fast Commit started for {}",
                 self.replica_name, instance
@@ -268,6 +273,7 @@ impl Processor {
                             status: true,
                         },
                     });
+                    #[cfg(debug_assertions)]
                     info!(
                         "{}: Sending Client Response for {}",
                         self.replica_name, instance
@@ -291,6 +297,7 @@ impl Processor {
                         let mut exec_out = self.execute_cmd(&instance);
                         out_msgs.append(&mut exec_out);
 
+                        #[cfg(debug_assertions)]
                         #[cfg(debug_assertions)]
                         info!(
                             "{}: Executed fast committed read {}",
@@ -318,6 +325,7 @@ impl Processor {
             instance,
         } = msg;
 
+        #[cfg(debug_assertions)]
         info!(
             "{}: Commit received for {}, seq: {}, num_deps: {}",
             self.replica_name,
@@ -356,6 +364,7 @@ impl Processor {
             instance,
         } = msg;
 
+        #[cfg(debug_assertions)]
         info!(
             "{}: Accept received for {}, seq: {}, num_deps: {}",
             self.replica_name,
@@ -399,8 +408,6 @@ impl Processor {
             "{}: AcceptOk received for {} from {}",
             self.replica_name, instance, from_replica
         );
-        #[cfg(not(debug_assertions))]
-        info!("{}: AcceptOk received for {}", self.replica_name, instance);
 
         // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
         if replica != self.replica_name {
@@ -453,6 +460,7 @@ impl Processor {
                             status: true,
                         },
                     });
+                    #[cfg(debug_assertions)]
                     info!(
                         "{}: Sending Client Response for {}",
                         self.replica_name, instance

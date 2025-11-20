@@ -1,10 +1,10 @@
-use tracing::info;
-
 use crate::common::{ClientResponse, Command, CommandResult, EMsg, Instance};
 use crate::epaxos::{CmdEntry, CmdStatus, Processor};
 use core::panic;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+#[cfg(debug_assertions)]
+use tracing::info;
 // use tracing::{error};
 
 impl Processor {
@@ -93,6 +93,8 @@ impl Processor {
         let mut deps = HashSet::new();
         let mut max_seq = 0;
 
+        let is_read = matches!(cmd, Command::Get { .. });
+
         for (r, cmds_vec) in &self.cmds {
             for (i, cmd_opt) in cmds_vec.iter().enumerate() {
                 if let Some(c) = cmd_opt {
@@ -104,6 +106,16 @@ impl Processor {
                     if matches!(c.status, CmdStatus::Executed) {
                         continue;
                     }
+
+                    let entry_is_read = matches!(c.cmd, Command::Get { .. });
+
+                    // RULE:
+                    // - If incoming command is READ, ignore READ dependencies.
+                    // - If incoming command is WRITE, include both READ and WRITE deps.
+                    if is_read && entry_is_read {
+                        continue; // READ should not depend on READ
+                    }
+
                     if c.cmd.conflicts_with(cmd) {
                         deps.insert(Instance {
                             replica: r.clone(),
