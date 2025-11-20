@@ -16,6 +16,8 @@ use reactor_actor::{BehaviourBuilder, RouteTo, RuntimeCtx, SendErrAction};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec;
 
+use tracing::{error, info};
+
 // //////////////////////////////////////////////////////////////////////////////
 //                                  Processor
 // //////////////////////////////////////////////////////////////////////////////
@@ -71,7 +73,7 @@ impl Processor {
     // used to get deps of a given cmd entry
     // iterates through all CmdInstance present in cmds for all replicas, and if key is same,
     // add it to cmd_entry deps
-    // fn get_interfs(&self, cmd_entry: &mut CmdEntry) {
+
     fn get_interfs(&mut self, replica: String, inst_num: u64) {
         // Step 1: read-only borrow to compute deps and calculate max seq
         let (deps, max_seq) = {
@@ -130,6 +132,80 @@ impl Processor {
     
         cmd_entry.deps.extend(deps);
     }
+
+    // fn get_interfs(&mut self, replica: String, inst_num: u64) {
+        
+    //     let (deps, max_seq) = {
+    //         let mut deps: HashSet<Instance> = HashSet::new();
+    //         let mut max_seq = 0;
+
+    //         let cmd = self.cmds[&replica][inst_num as usize]
+    //             .as_ref()
+    //             .unwrap()
+    //             .cmd
+    //             .clone();
+        
+    //         // Track the most recent interfering instance for each replica
+    //         let mut most_recent_interfering: HashMap<String, u64> = HashMap::new();
+        
+    //         for (r, cmds_vec) in &self.cmds {
+    //             for (i, cmd_opt) in cmds_vec.iter().enumerate() {
+    //                 if let Some(c) = cmd_opt {
+    //                     // Skip the current command itself
+    //                     if r == &replica && i as u64 == inst_num {
+    //                         continue;
+    //                     }
+        
+    //                     // Skip commands that are already executed
+    //                     if matches!(c.status, CmdStatus::Executed) {
+    //                         continue;
+    //                     }
+        
+    //                     // Skip commands that are of type `Get` (read)
+    //                     if matches!(c.cmd, Command::Get { .. }) {
+    //                         continue;
+    //                     }
+        
+    //                     // Check if the command conflicts
+    //                     if c.cmd.conflicts_with(&cmd) {
+    //                         // Update the most recent interfering instance for this replica
+    //                         let current_instance_num = most_recent_interfering.entry(r.clone()).or_insert(0);
+    //                         if i as u64 > *current_instance_num {
+    //                             *current_instance_num = i as u64;
+    //                         }
+        
+    //                         // Update max_seq with the maximum seq value from the dependency
+    //                         max_seq = max_seq.max(c.seq);
+    //                     }
+    //                 }
+    //             }
+    //         }
+        
+    //         // Add only the most recent interfering instances to the dependency list
+    //         for (r, instance_num) in most_recent_interfering {
+    //             deps.insert(Instance {
+    //                 replica: r,
+    //                 instance_num,
+    //             });
+    //         }
+        
+    //         (deps, max_seq)
+    //     };
+
+    //     // Step 2: mutable borrow only after reading is done
+    //     let cmd_entry = self
+    //         .cmds
+    //         .get_mut(&replica)
+    //         .unwrap()
+    //         .get_mut(inst_num as usize)
+    //         .unwrap()
+    //         .as_mut()
+    //         .unwrap();
+    
+    //     cmd_entry.seq = cmd_entry.seq.max(1 + max_seq);
+    
+    //     cmd_entry.deps.extend(deps);
+    // }
 
     // precondition: all dependencies are either committed or executed
     fn build_dep_graph(&self, root: Instance)
@@ -460,6 +536,7 @@ impl reactor_actor::ActorProcess for Processor {
     fn process(&mut self, input: Self::IMsg) -> Vec<Self::OMsg> {
         match &input {
             EMsg::ClientRequest(msg) => {
+                info!("{}: Client Request Rcvd: {:?}", self.replica_name, msg.cmd);
                 let cmds_entry = self.cmds.get_mut(&self.replica_name).unwrap();
                 let vec_size = cmds_entry.len();
                 if vec_size > 0 {
@@ -503,6 +580,7 @@ impl reactor_actor::ActorProcess for Processor {
                 vec![pre_accept]  
             }
             EMsg::PreAccept(msg) => {
+                info!("{}: PreAccept received for {:?}", self.replica_name, msg.instance);
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
 
@@ -540,11 +618,13 @@ impl reactor_actor::ActorProcess for Processor {
                 vec![pre_accept_ok]
             }
             EMsg::PreAcceptOk(msg) => {
+                info!( "{}: PreAcceptOk received for {:?}",self.replica_name, msg.instance);
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
 
                 // should we check if this replica is same as replica name just to ensure that preAcceptok comes to leader only?
                 if msg.instance.replica != self.replica_name {
+                    error!("PreAcceptOk received by non-leader replica");
                     return vec![];
                 }
 
@@ -555,6 +635,10 @@ impl reactor_actor::ActorProcess for Processor {
 
                 // Check if already committed
                 if matches!(cmd_entry_mut.status, CmdStatus::Committed) {
+                    info!(
+                        "{}: PreAcceptOk received for already committed command. Ignoring",
+                        self.replica_name
+                    );
                     return vec![]; // Ignore the message 
                 }
 
@@ -563,6 +647,10 @@ impl reactor_actor::ActorProcess for Processor {
                 if matches!(cmd_entry_mut.status, CmdStatus::Accepted) {
                     // Ensure quorum counter is less than majority
                     if self.quorum_ctr.len() > inst_num as usize && self.quorum_ctr[inst_num as usize] >= majority {
+                        info!(
+                            "{}: PreAcceptOk received for already accepted command with sufficient quorum. Ignoring",
+                            self.replica_name
+                        );
                         return vec![]; // Ignore the message if already accepted and quorum is reached
                     }
                 }
@@ -590,6 +678,11 @@ impl reactor_actor::ActorProcess for Processor {
                         // Reset quorum counter for reuse
                         self.quorum_ctr[inst_num as usize] = 0;
 
+                        info!(
+                            "{}: Paxos Accept Started for {:?}",
+                            self.replica_name, msg.instance
+                        );
+
                         let accept_msg = EMsg::Accept(AcceptMsg {
                             cmd: cmd_entry_mut.cmd.clone(),
                             seq: cmd_entry_mut.seq,
@@ -599,7 +692,13 @@ impl reactor_actor::ActorProcess for Processor {
                         return vec![accept_msg];
                     } else {
                         // Wait for fast quorum
-                        return vec![];
+                        info!(
+                            "{}: Majority reached without conflicts for {:?}, waiting for Fast Quorum",
+                            self.replica_name, msg.instance
+                        );
+                        if majority != fast_quorum {
+                            return vec![];
+                        }
                     }
                 }
 
@@ -609,6 +708,11 @@ impl reactor_actor::ActorProcess for Processor {
                         // Commit phase
                         // changing msg status to committed 
                         cmd_entry_mut.status = CmdStatus::Committed;
+
+                        info!(
+                            "{}: Fast Commit started for {:?}",
+                            self.replica_name, msg.instance
+                        );
 
                         let commit_msg = EMsg::Commit(CommitMsg {
                             cmd: cmd_entry_mut.cmd.clone(),
@@ -630,11 +734,21 @@ impl reactor_actor::ActorProcess for Processor {
                                 },
                             });
 
+                            info!(
+                                "{}: Sending Client Response for {:?}",
+                                self.replica_name, msg.instance
+                            );
+
                             // put this code block in Commit also TODO
                             // put all code in one function TODO
                             // put as many panic statements as possible TODO
                        
                             let mut out_msgs = self.handle_pending_reads(&msg.instance);
+
+                            info!(
+                                "{}: Sending Client Responses for {:?}",
+                                self.replica_name, out_msgs
+                            );
 
                             let mut final_msgs = vec![commit_msg, client_response];
                             final_msgs.append(&mut out_msgs);
@@ -645,8 +759,17 @@ impl reactor_actor::ActorProcess for Processor {
                             if self.deps_all_ready (&msg.instance) {
                                 let mut exec_out = self.execute_cmd(msg.instance.clone());
                                 out_msgs.append(&mut exec_out);
+                                info!(
+                                    "{}: Sending Client Responses for {:?}",
+                                    self.replica_name, exec_out
+                                );
+
                             } else{
                                 self.pending_reads.insert(msg.instance.clone());
+                                info!(
+                                    "{}: Adding Read to pending_reads list {:?}",
+                                    self.replica_name, msg.instance
+                                );
                             }
                             return out_msgs;
                         }
@@ -660,6 +783,8 @@ impl reactor_actor::ActorProcess for Processor {
             EMsg::Commit(msg) => {
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
+
+                info!("{}: Commit received for {:?}", self.replica_name, msg.instance);
 
                 // Step 1: Resize the cmds array for the given replica
                 self.resize_cmds((inst_num + 1) as usize, &replica);
@@ -680,6 +805,11 @@ impl reactor_actor::ActorProcess for Processor {
 
                 if matches!(msg.cmd, Command::Set { .. }) {
                     let mut out_msgs = self.handle_pending_reads(&msg.instance);
+                    
+                    info!(
+                        "{}: Sending Client Responses for {:?}",
+                        self.replica_name, out_msgs
+                    );
 
                     let mut final_msgs = vec![];
                     final_msgs.append(&mut out_msgs);
@@ -691,6 +821,8 @@ impl reactor_actor::ActorProcess for Processor {
             EMsg::Accept(msg) => {
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
+
+                info!("{}: Accept received for {:?}", self.replica_name, msg.instance);
 
                 // Step 1: Resize the cmds array for the given replica
                 self.resize_cmds((inst_num + 1) as usize, &replica);
@@ -718,6 +850,8 @@ impl reactor_actor::ActorProcess for Processor {
             EMsg::AcceptOk(msg) => {
                 let replica = msg.instance.replica.clone();
                 let inst_num = msg.instance.instance_num;
+
+                info!("{}: AcceptOk received for {:?}", self.replica_name, msg.instance);
 
                 // should we check if this replica is same as replica name just to ensure that acceptok comes to leader only?
                 if msg.instance.replica != self.replica_name {
@@ -765,7 +899,17 @@ impl reactor_actor::ActorProcess for Processor {
                             },
                         });
 
+                        info!(
+                            "{}: Sending Client Response for {:?}",
+                            self.replica_name, msg.instance
+                        );
+
                         let mut out_msgs = self.handle_pending_reads(&msg.instance);
+
+                        info!(
+                            "{}: Sending Client Responses for {:?}",
+                            self.replica_name, out_msgs
+                        );
 
                         let mut final_msgs = vec![commit_msg, client_response];
                         final_msgs.append(&mut out_msgs);
@@ -776,8 +920,17 @@ impl reactor_actor::ActorProcess for Processor {
                         if self.deps_all_ready (&msg.instance) {
                             let mut exec_out = self.execute_cmd(msg.instance.clone());
                             out_msgs.append(&mut exec_out);
+                            info!(
+                                "{}: Sending Client Responses for {:?}",
+                                self.replica_name, exec_out
+                            );
+
                         } else{
                             self.pending_reads.insert(msg.instance.clone());
+                            info!(
+                                "{}: Adding Read to pending_reads list {:?}",
+                                self.replica_name, msg.instance
+                            );
                         }
                         return out_msgs;
                     }

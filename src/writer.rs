@@ -22,7 +22,7 @@ impl Iterator for WriteReqGenerator {
     type Item = EMsg;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.count < 10 {
+        if self.count < 1 {
             std::thread::sleep(Duration::from_millis(10 * SLEEP_MS));
             self.count += 1;
 
