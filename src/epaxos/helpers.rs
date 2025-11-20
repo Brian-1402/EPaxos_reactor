@@ -465,8 +465,8 @@ impl Processor {
             );
             return vec![];
         }
-        // out_msgs = self.execute_cmd(instance.clone());
-        self.execute_cmd(instance);
+        out_msgs = self.execute_cmd(instance);
+        // self.execute_cmd(instance);
 
         #[cfg(debug_assertions)]
         info!(
